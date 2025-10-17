@@ -502,7 +502,7 @@ async def setup_roles_msg(interaction: discord.Interaction):
 @bot.event
 async def on_raw_reaction_add(payload):
     # Bỏ qua nếu Reaction là của bot hoặc nếu DB chưa sẵn sàng
-    if payload.member.bot or db is None:
+    if payload.member is None or payload.member.bot or db is None:
         return
 
     # Lấy thông tin Message ID của tin nhắn Reaction Role đã lưu
