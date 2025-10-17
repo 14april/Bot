@@ -659,7 +659,7 @@ async def on_raw_reaction_remove(payload):
 
 
 # ====== Lệnh /buff_xp (CHỈ DÀNH CHO GUILD OWNER) ======
-@bot.tree.command(name="buff_xp", description="[OWNER ONLY] Thêm XP cho người dùng để kiểm tra hệ thống.",default_permissions=discord.Permissions(administrator=True))
+@bot.tree.command(name="buff_xp", description="[OWNER ONLY] Thêm XP cho người dùng để kiểm tra hệ thống.",default_member_permissions=discord.Permissions(administrator=True))
 @app_commands.describe(member="Người dùng muốn buff XP", amount="Số lượng XP muốn thêm")
 @commands.is_owner() 
 async def buff_xp(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -1053,7 +1053,7 @@ async def transfer_command(interaction: discord.Interaction, recipient: discord.
     
     await interaction.followup.send(embed=embed)
     # ====== Lệnh /buff (Owner Only: Thêm tiền tệ) ======
-@bot.tree.command(name="buff", description="[OWNER ONLY] Thêm Fund/Coupon cho người chơi.",default_permissions=discord.Permissions(administrator=True))
+@bot.tree.command(name="buff", description="[OWNER ONLY] Thêm Fund/Coupon cho người chơi.",default_member_permissions=discord.Permissions(administrator=True))
 @app_commands.describe(
     target_member="Người chơi cần buff.",
     currency_type="Chọn loại tiền muốn thêm (Fund hoặc Coupon).",
