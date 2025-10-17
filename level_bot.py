@@ -27,29 +27,52 @@ db = None
 ROLE_IDS = {
     # Nhóm vai trò chính
     "HERO_GROUP": 123456789012345678,     
+
     "MONSTER_GROUP": 123456789012345679,  
+
     
+
     # Hero Ranks (C, B, A, S)
-    "HERO_C": 123456789012345680,
-    "HERO_B": 123456789012345681,
-    "HERO_A": 123456789012345682,
-    "HERO_S": 123456789012345683,
+
+    "HERO_C": 1428609299550175293,
+
+    "HERO_B": 1428609397906477116,
+
+    "HERO_A": 1428609426117492756,
+
+    "HERO_S": 1428609449173454859,
+
     
+
     # Monster Ranks (Tiger, Demon, Dragon, God)
-    "M_TIGER_LOW": 123456789012345684,
-    "M_TIGER_MID": 123456789012345685,
-    "M_TIGER_HIGH": 123456789012345686,
-    "M_DEMON_LOW": 123456789012345687,
-    "M_DEMON_MID": 123456789012345688,
-    "M_DEMON_HIGH": 123456789012345689,
-    "M_DRAGON_LOW": 123456789012345690,
-    "M_DRAGON_MID": 123456789012345691,
-    "M_DRAGON_HIGH": 123456789012345692,
-    "M_GOD": 123456789012345693, 
+
+    "M_TIGER_LOW": 1428609481549414493,
+
+    "M_TIGER_MID": 1428609524826112121,
+
+    "M_TIGER_HIGH": 1428609554794418267,
+
+    "M_DEMON_LOW": 1428609624952799262,
+
+    "M_DEMON_MID": 1428609662466527272,
+
+    "M_DEMON_HIGH": 1428609686843953236,
+
+    "M_DRAGON_LOW": 1428609714521903186,
+
+    "M_DRAGON_MID": 1428655205951602759,
+
+    "M_DRAGON_HIGH": 1428655242936975392,
+
+    "M_GOD": 1428609742116225034, 
+
+
 
     # Tiền tệ (Emoji/Icon)
-    "FUND_EMOJI": "<:fund:123456789012345699>", 
-    "COUPON_EMOJI": "<:coupon:123456789012345698>", 
+
+    "FUND_EMOJI": "<:fund:1378705631426646016>", 
+
+    "COUPON_EMOJI": "<:coupon:1428342053548462201>", 
 }
 
 # Cấu hình XP và Level
@@ -126,14 +149,21 @@ async def get_user_data(user_id):
         
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
     try:
-        doc = await doc_ref.get()
+        doc = doc_ref.get() # Firestore Admin SDK không phải async, nên dùng get() thường
         if doc.exists:
             data = doc.to_dict()
-            # Đảm bảo các trường datetime được khởi tạo (dù Firestore có thể xử lý)
-            if 'last_xp_message' not in data:
+            
+            # Xử lý các trường datetime từ Firestore Timestamp
+            if data.get('last_xp_message') and isinstance(data['last_xp_message'], firestore.client.datetime.datetime):
+                data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
+            else:
                  data['last_xp_message'] = datetime.min
-            if 'last_daily' not in data:
+                 
+            if data.get('last_daily') and isinstance(data['last_daily'], firestore.client.datetime.datetime):
+                data['last_daily'] = data['last_daily'].replace(tzinfo=None)
+            else:
                  data['last_daily'] = None
+                 
             return data
         else:
             # Tạo dữ liệu mặc định nếu người dùng chưa tồn tại
@@ -146,7 +176,6 @@ async def get_user_data(user_id):
                 'last_daily': None,
                 'last_xp_message': datetime.min,
             }
-            # LƯU Ý: Không cần setDoc ở đây, chỉ khi có thay đổi mới lưu.
             return default_data
 
     except Exception as e:
@@ -161,13 +190,16 @@ async def save_user_data(user_id, data):
         
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
     
-    # Chuẩn hóa datetime.min để lưu trữ (Firestore không chấp nhận datetime.min)
+    # Chuẩn bị dữ liệu để lưu
     data_to_save = data.copy()
+    
+    # Firestore có thể xử lý datetime objects, nhưng phải loại bỏ datetime.min
     if data_to_save['last_xp_message'] == datetime.min:
+        # Sử dụng Server Timestamp nếu giá trị là datetime.min
         data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
         
     try:
-        await doc_ref.set(data_to_save)
+        doc_ref.set(data_to_save) # Firestore Admin SDK không phải async, dùng set() thường
         # print(f"💾 Đã lưu dữ liệu cho user {user_id} thành công.")
     except Exception as e:
         print(f"❌ Lỗi khi lưu dữ liệu cho user {user_id}: {e}")
@@ -212,6 +244,11 @@ async def update_user_level_and_roles(member, data):
     # 1. Kiểm tra Level Up
     new_level = data['level']
     while data['xp'] >= get_required_xp(new_level):
+        # Kiểm tra giới hạn level
+        if new_level >= max(LEVEL_TIERS['HERO'].keys()) and data['role_group'] == 'HERO' and new_level >= max(LEVEL_TIERS['MONSTER'].keys()) and data['role_group'] == 'MONSTER':
+            # Nếu đã đạt Level cao nhất và vẫn nhận XP, XP dư được giữ lại nhưng không thăng cấp
+            break 
+
         data['xp'] -= get_required_xp(new_level)
         new_level += 1
         level_changed = True
@@ -235,6 +272,7 @@ async def update_user_level_and_roles(member, data):
                 return 
 
             group_prefix = 'HERO' if data['role_group'] == 'HERO' else 'M_' 
+            # Lấy tất cả Rank Role cho nhóm đó để chuẩn bị gỡ Role cũ
             all_rank_roles = [guild.get_role(id) for key, id in ROLE_IDS.items() 
                               if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
             
@@ -243,7 +281,7 @@ async def update_user_level_and_roles(member, data):
             if roles_to_remove:
                 await member.remove_roles(*roles_to_remove, reason="Auto Role: Rank cũ")
             
-            if new_role not in member.roles:
+            if new_role and new_role not in member.roles:
                 await member.add_roles(new_role, reason="Auto Role: Rank mới")
                 try:
                     await member.send(f"🌟 Bạn đã được thăng cấp Rank thành **{new_role.name}**!")
@@ -259,7 +297,6 @@ async def update_user_level_and_roles(member, data):
 async def on_ready():
     global db
     if db is None:
-        # Khởi tạo Firestore sau khi bot kết nối để đảm bảo môi trường đã sẵn sàng
         initialize_firestore() 
         if db is None:
             print("🛑 Lỗi nghiêm trọng: Không thể kết nối Firestore. Dữ liệu sẽ không được lưu trữ.")
@@ -287,7 +324,13 @@ async def on_message(message):
         return
 
     # Giới hạn XP: chỉ nhận XP sau 60 giây kể từ tin nhắn cuối cùng
-    time_since_last_msg = datetime.now() - data.get('last_xp_message', datetime.min)
+    last_xp = data.get('last_xp_message', datetime.min)
+    
+    # Đảm bảo last_xp là datetime object
+    if not isinstance(last_xp, datetime):
+        last_xp = datetime.min
+        
+    time_since_last_msg = datetime.now() - last_xp
     
     if time_since_last_msg > timedelta(seconds=60):
         xp_gain = random.randint(5, 15)
@@ -301,6 +344,48 @@ async def on_message(message):
         await save_user_data(user_id, data) 
         
     await bot.process_commands(message) 
+
+
+# ====== Lệnh /buff_xp (CHỈ DÀNH CHO GUILD OWNER) ======
+@bot.tree.command(name="buff_xp", description="[OWNER ONLY] Thêm XP cho người dùng để kiểm tra hệ thống.")
+@app_commands.describe(member="Người dùng muốn buff XP", amount="Số lượng XP muốn thêm")
+@commands.is_owner() # Yêu cầu người dùng là bot owner (Discord Application Owner)
+async def buff_xp(interaction: discord.Interaction, member: discord.Member, amount: int):
+    # Kiểm tra Guild Owner (chủ server)
+    if interaction.guild.owner_id != interaction.user.id:
+        await interaction.response.send_message(
+            "❌ Lệnh này chỉ dành cho Chủ Server (Guild Owner).", ephemeral=True
+        )
+        return
+
+    if amount <= 0:
+        await interaction.response.send_message("❌ Số lượng XP phải lớn hơn 0.", ephemeral=True)
+        return
+        
+    data = await get_user_data(member.id)
+    
+    if data is None:
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        return
+        
+    old_level = data['level']
+    data['xp'] += amount
+    
+    # Cập nhật Level và Role
+    await update_user_level_and_roles(member, data)
+    
+    # Lưu lại data sau khi buff
+    await save_user_data(member.id, data) 
+    
+    new_level = data['level']
+    
+    response_msg = f"✅ Đã thêm **{amount} XP** cho {member.mention}.\n"
+    response_msg += f"XP hiện tại: **{data['xp']}** (Level **{new_level}**).\n"
+    
+    if new_level > old_level:
+        response_msg += f"**🎉 Thăng cấp từ Level {old_level} lên Level {new_level}!**"
+    
+    await interaction.response.send_message(response_msg)
 
 
 # ====== Lệnh /profile (Hiển thị thông tin người dùng) ======
@@ -492,5 +577,4 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     print("⚠️ Chưa có biến môi trường DISCORD_TOKEN!")
 else:
-    # LƯU Ý: Khởi tạo Firebase ở on_ready để đảm bảo tất cả async function sẵn sàng.
     bot.run(TOKEN)
