@@ -199,16 +199,20 @@ async def save_user_data(user_id, data):
     # Chuẩn bị dữ liệu để lưu
     data_to_save = data.copy()
 
-    # Xử lý datetime.min để lưu trữ thành Server Timestamp lần đầu (nếu cần)
+    # Xử lý datetime.min: Nếu là giá trị mặc định, chuyển thành Server Timestamp lần đầu (hoặc giữ nguyên nếu đã có)
+    # Đây là logic duy nhất cần giữ lại để xử lý thời gian ban đầu.
     if data_to_save.get('last_xp_message') == datetime.min:
         data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
-    
-    # Chuyển đổi datetime object sang firestore.SERVER_TIMESTAMP nếu cần thiết (để bảo toàn type)
-    if data_to_save.get('last_xp_message') and isinstance(data_to_save['last_xp_message'], datetime):
-        data_to_save['last_xp_message'] = datetime(data_to_save['last_xp_message'].year, data_to_save['last_xp_message'].month, data_to_save['last_xp_message'].day, data_to_save['last_xp_message'].hour, data_to_save['last_xp_message'].minute, data_to_save['last_xp_message'].second, data_to_save['last_xp_message'].microsecond)
-    
-    if data_to_save.get('last_daily') and isinstance(data_to_save['last_daily'], datetime):
-        data_to_save['last_daily'] = firestore.firestore.Datetime(data_to_save['last_daily'].year, data_to_save['last_daily'].month, data_to_save['last_daily'].day, data_to_save['last_daily'].hour, data_to_save['last_daily'].minute, data_to_save['last_daily'].second, data_to_save['last_daily'].microsecond)
+        
+    # FIX: Loại bỏ các dòng chuyển đổi thời gian gây lỗi.
+    # Thư viện Firestore có thể tự động xử lý đối tượng datetime tiêu chuẩn của Python.
+    # Xóa/Chú thích dòng bị lỗi (dòng 208):
+    # if data_to_save.get('last_xp_message') and isinstance(data_to_save['last_xp_message'], datetime):
+    #     data_to_save['last_xp_message'] = datetime(data_to_save['last_xp_message'].year, data_to_save['last_xp_message'].month, data_to_save['last_xp_message'].day, data_to_save['last_xp_message'].hour, data_to_save['last_xp_message'].minute, data_to_save['last_xp_message'].second, data_to_save['last_xp_message'].microsecond)
+
+    # Xóa/Chú thích dòng bị lỗi (dòng 211):
+    # if data_to_save.get('last_daily') and isinstance(data_to_save['last_daily'], datetime):
+    #     data_to_save['last_daily'] = datetime(data_to_save['last_daily'].year, data_to_save['last_daily'].month, data_to_save['last_daily'].day, data_to_save['last_daily'].hour, data_to_save['last_daily'].minute, data_to_save['last_daily'].second, data_to_save['last_daily'].microsecond)
 
 
     try:
