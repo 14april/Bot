@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import random
 import json
 import asyncio
+from firebase_admin import firestore
 
 import discord
 from discord import app_commands
@@ -200,20 +201,20 @@ async def save_user_data(user_id, data):
     data_to_save = data.copy()
 
     # Xử lý datetime.min: Nếu là giá trị mặc định, chuyển thành Server Timestamp lần đầu (hoặc giữ nguyên nếu đã có)
-    # Đây là logic duy nhất cần giữ lại để xử lý thời gian ban đầu.
     if data_to_save.get('last_xp_message') == datetime.min:
         data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
         
-    # FIX: Loại bỏ các dòng chuyển đổi thời gian gây lỗi.
-    # Thư viện Firestore có thể tự động xử lý đối tượng datetime tiêu chuẩn của Python.
-    # Xóa/Chú thích dòng bị lỗi (dòng 208):
+    if data_to_save.get('last_daily') == datetime.min:
+        data_to_save['last_daily'] = firestore.SERVER_TIMESTAMP
+
+
+    # FIX: Đã loại bỏ hoàn toàn logic chuyển đổi datetime gây lỗi ở đây (dòng 208 và 211 cũ).
+    # Các đối tượng datetime tiêu chuẩn sẽ được Firestore tự động xử lý.
+    # Logic cũ gây lỗi:
     # if data_to_save.get('last_xp_message') and isinstance(data_to_save['last_xp_message'], datetime):
-    #     data_to_save['last_xp_message'] = datetime(data_to_save['last_xp_message'].year, data_to_save['last_xp_message'].month, data_to_save['last_xp_message'].day, data_to_save['last_xp_message'].hour, data_to_save['last_xp_message'].minute, data_to_save['last_xp_message'].second, data_to_save['last_xp_message'].microsecond)
-
-    # Xóa/Chú thích dòng bị lỗi (dòng 211):
+    #     data_to_save['last_xp_message'] = datetime(...) # Dòng này gây lỗi
     # if data_to_save.get('last_daily') and isinstance(data_to_save['last_daily'], datetime):
-    #     data_to_save['last_daily'] = datetime(data_to_save['last_daily'].year, data_to_save['last_daily'].month, data_to_save['last_daily'].day, data_to_save['last_daily'].hour, data_to_save['last_daily'].minute, data_to_save['last_daily'].second, data_to_save['last_daily'].microsecond)
-
+    #     data_to_save['last_daily'] = datetime(...) # Dòng này gây lỗi
 
     try:
         doc_ref.set(data_to_save)
