@@ -115,20 +115,27 @@ def initialize_firestore():
         cred_dict = json.loads(cred_json)
         cred = credentials.Certificate(cred_dict)
 
-        # Khởi tạo ứng dụng Firebase
-        firebase_admin.initialize_app(cred)
+        # Khởi tạo ứng dụng Firebase. Nếu đã khởi tạo rồi thì không gọi lại.
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+            
         db = firestore.client()
         print("✅ Đã kết nối thành công với Firestore.")
 
     except Exception as e:
-        print(f"❌ Lỗi khởi tạo Firebase/Firestore: {e}")
-        db = None
+        print(f"❌ Lỗi khởi tạo Firebase/Firestore: {e}. Vui lòng kiểm tra FIREBASE_CREDENTIALS.")
+        db = None # Đảm bảo db là None nếu thất bại
 
 
 async def get_user_data(user_id):
     """Lấy dữ liệu người dùng từ Firestore. Nếu chưa có, trả về dữ liệu mặc định."""
+    global db
     if db is None:
-        return None  # Trả về None nếu DB chưa sẵn sàng
+        # Thử khởi tạo lại DB trong trường hợp on_ready chưa chạy hoặc thất bại
+        initialize_firestore() 
+        if db is None:
+            # Nếu vẫn không kết nối được sau khi thử lại, trả về None
+            return None 
 
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
     try:
@@ -163,13 +170,20 @@ async def get_user_data(user_id):
 
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu cho user {user_id}: {e}")
+        # Rất có thể là lỗi kết nối/mạng, đặt db về None để kích hoạt khởi tạo lại
+        db = None 
         return None
 
 
 async def save_user_data(user_id, data):
     """Lưu dữ liệu người dùng vào Firestore."""
+    global db
     if db is None:
-        return
+        # Thử khởi tạo lại DB trong trường hợp on_ready chưa chạy hoặc thất bại
+        initialize_firestore() 
+        if db is None:
+            print(f"🛑 Không thể lưu dữ liệu cho user {user_id}. DB chưa sẵn sàng.")
+            return
 
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
 
@@ -185,6 +199,8 @@ async def save_user_data(user_id, data):
         doc_ref.set(data_to_save)
     except Exception as e:
         print(f"❌ Lỗi khi lưu dữ liệu cho user {user_id}: {e}")
+        # Rất có thể là lỗi kết nối/mạng, đặt db về None để kích hoạt khởi tạo lại
+        db = None
 
 
 # ==============================================================================
@@ -316,15 +332,24 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     if message.author.bot or db is None:
-        return
+        # Nếu db là None, thử khởi tạo lại ngay tại đây
+        if db is None:
+            initialize_firestore()
+            if db is None:
+                # Nếu vẫn không được, bỏ qua xử lý tin nhắn
+                await bot.process_commands(message) 
+                return
 
     if not isinstance(message.channel, discord.TextChannel):
+        await bot.process_commands(message)
         return
 
     user_id = message.author.id
     # Lấy data bất đồng bộ từ Firestore
     data = await get_user_data(user_id)
     if data is None:
+        # Nếu data là None, có nghĩa là DB chưa sẵn sàng (đã thử khởi tạo lại)
+        await bot.process_commands(message)
         return
 
     # Giới hạn XP: chỉ nhận XP sau XP_COOLDOWN_SECONDS giây kể từ tin nhắn cuối cùng
@@ -373,7 +398,7 @@ async def buff_xp(interaction: discord.Interaction, member: discord.Member, amou
     data = await get_user_data(member.id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
 
     old_level = data['level']
@@ -403,7 +428,7 @@ async def profile(interaction: discord.Interaction):
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
 
     required_xp = get_required_xp(data['level'])
@@ -431,7 +456,7 @@ async def daily(interaction: discord.Interaction):
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
 
     now = datetime.now()
@@ -478,7 +503,7 @@ async def exchange(interaction: discord.Interaction, amount: int):
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
 
     if amount <= 0:
@@ -512,7 +537,7 @@ async def select_group(interaction: discord.Interaction):
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
 
     class RoleGroupSelect(discord.ui.View):
@@ -600,7 +625,7 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
     
     currency_key = currency.value # 'fund' hoặc 'coupon'
@@ -630,12 +655,12 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
         # Thắng: nhận lại số cược + tiền thắng (tổng cộng +bet_amount)
         data[currency_key] += bet_amount 
         gain_or_loss = bet_amount
-        result_text = f"🎉 **THẮNG CUỘC!** Bạn đã nhân đôi số tiền cược **{bet_amount}** {currency_emoji} {currency_name}."
+        result_text = f"🎉 **THẮNG CUỘC!** Bạn đã nhân đôi số tiền cược **{bet_amount:,}** {currency_emoji} {currency_name}."
     else:
         # Thua: mất số tiền cược (-bet_amount)
         data[currency_key] -= bet_amount
         gain_or_loss = -bet_amount
-        result_text = f"💀 **THUA CƯỢC!** Bạn đã mất số tiền cược **{bet_amount}** {currency_emoji} {currency_name}."
+        result_text = f"💀 **THUA CƯỢC!** Bạn đã mất số tiền cược **{bet_amount:,}** {currency_emoji} {currency_name}."
 
     new_balance = data[currency_key]
 
