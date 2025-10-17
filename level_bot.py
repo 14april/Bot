@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 import random
 import json
+import math # Import math để dùng math.floor (hoặc dùng int() cho đơn giản)
 
 import discord
 from discord import app_commands
@@ -65,6 +66,11 @@ LEVEL_TIERS = {
 }
 BASE_XP_TO_LEVEL = 100
 XP_SCALING = 1.5
+
+# --- CẬP NHẬT THEO YÊU CẦU ---
+# Giảm cooldown nhận XP khi nhắn tin từ 60s xuống 5s
+XP_COOLDOWN_SECONDS = 5
+# -----------------------------
 
 
 # ====== Fake web server để Render không bị kill ======
@@ -214,13 +220,14 @@ def get_current_rank_role(data):
 
 
 async def update_user_level_and_roles(member, data):
-    """Kiểm tra và cập nhật Level, sau đó áp dụng Role Rank mới."""
+    """Kiểm tra và cập nhật Level, sau đó áp dụng Role Rank mới, và THÊM THƯỞNG ngẫu nhiên."""
     guild = member.guild
     
     # 1. Kiểm tra Level Up
     new_level = data['level']
     max_level_hero = max(LEVEL_TIERS['HERO'].keys())
     max_level_monster = max(LEVEL_TIERS['MONSTER'].keys())
+    level_up_occurred = False
 
     while data['xp'] >= get_required_xp(new_level):
         # Kiểm tra giới hạn level cho nhóm hiện tại
@@ -231,15 +238,28 @@ async def update_user_level_and_roles(member, data):
 
         data['xp'] -= get_required_xp(new_level)
         new_level += 1
+        level_up_occurred = True
+        
+        # --- THÊM THƯỞNG NGẪU NHIÊN KHI LÊN CẤP ---
+        # Thưởng Fund ngẫu nhiên (50-150) và Coupon ngẫu nhiên (10-30)
+        reward_fund = random.randint(50, 150)
+        reward_coupon = random.randint(10, 30)
+        
+        data['fund'] += reward_fund
+        data['coupon'] += reward_coupon
+        # ----------------------------------------
         
         try:
-            await member.send(f"🎉 Chúc mừng {member.mention}! Bạn đã thăng cấp lên **Level {new_level}**!")
+            await member.send(
+                f"🎉 Chúc mừng {member.mention}! Bạn đã thăng cấp lên **Level {new_level}**!\n"
+                f"🎁 Thưởng Level Up: **+{reward_fund}** {ROLE_IDS['FUND_EMOJI']} Fund và **+{reward_coupon}** {ROLE_IDS['COUPON_EMOJI']} Coupon!"
+            )
         except discord.Forbidden:
             pass
 
-    if new_level != data['level']:
+    if level_up_occurred:
         data['level'] = new_level
-        # Lưu lại vì Level đã thay đổi
+        # Lưu lại vì Level, XP và Tiền tệ đã thay đổi
         await save_user_data(member.id, data)
 
     # 2. Xử lý Auto Role Rank
@@ -307,7 +327,8 @@ async def on_message(message):
     if data is None:
         return
 
-    # Giới hạn XP: chỉ nhận XP sau 60 giây kể từ tin nhắn cuối cùng
+    # Giới hạn XP: chỉ nhận XP sau XP_COOLDOWN_SECONDS giây kể từ tin nhắn cuối cùng
+    MIN_XP_COOLDOWN = timedelta(seconds=XP_COOLDOWN_SECONDS)
     last_xp = data.get('last_xp_message', datetime.min)
 
     # Đảm bảo last_xp là datetime object
@@ -316,7 +337,7 @@ async def on_message(message):
 
     time_since_last_msg = datetime.now() - last_xp
 
-    if time_since_last_msg > timedelta(seconds=60):
+    if time_since_last_msg > MIN_XP_COOLDOWN:
         xp_gain = random.randint(5, 15)
         data['xp'] += xp_gain
         data['last_xp_message'] = datetime.now()
@@ -324,8 +345,11 @@ async def on_message(message):
         # Cập nhật Level và Role (hàm này sẽ gọi save_user_data nếu level thay đổi)
         await update_user_level_and_roles(message.author, data)
 
-        # Luôn lưu lại XP và last_xp_message
-        await save_user_data(user_id, data)
+        # Luôn lưu lại XP và last_xp_message (trừ khi đã được lưu trong update_user_level_and_roles)
+        # Tải lại data để so sánh level cũ, tránh trường hợp bị mất data nếu update_user_level_and_roles đã save
+        current_db_data = await get_user_data(user_id)
+        if current_db_data and data['level'] == current_db_data.get('level', 0):
+            await save_user_data(user_id, data)
 
     await bot.process_commands(message)
 
@@ -401,7 +425,7 @@ async def profile(interaction: discord.Interaction):
 
 
 # ====== Lệnh /daily (Điểm danh nhận tiền) ======
-@bot.tree.command(name="daily", description="Điểm danh mỗi ngày để nhận Fund và Coupon")
+@bot.tree.command(name="daily", description="Điểm danh mỗi ngày để nhận Fund và Coupon (Reset 0:00)")
 async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     data = await get_user_data(user_id)
@@ -411,16 +435,20 @@ async def daily(interaction: discord.Interaction):
         return
 
     now = datetime.now()
-    cooldown_time = timedelta(hours=24)
     last_daily = data.get('last_daily')
+    now_date = now.date()
 
-    if last_daily and (now - last_daily < cooldown_time):
-        remaining_time = last_daily + cooldown_time - now
+    # Logic reset vào 0:00 (nửa đêm)
+    if last_daily and last_daily.date() == now_date:
+        # Đã điểm danh hôm nay, tính thời gian còn lại đến 0:00 ngày mai
+        next_reset = datetime(now_date.year, now_date.month, now_date.day) + timedelta(days=1)
+        remaining_time = next_reset - now
+        
         hours, remainder = divmod(int(remaining_time.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
 
         await interaction.response.send_message(
-            f"⏳ Bạn đã điểm danh hôm nay rồi! Vui lòng chờ **{hours} giờ {minutes} phút** nữa.",
+            f"⏳ Bạn đã điểm danh hôm nay rồi! Lượt điểm danh mới sẽ có lúc **0:00** (nửa đêm) hằng ngày. Vui lòng chờ **{hours} giờ {minutes} phút** nữa.",
             ephemeral=True
         )
         return
@@ -508,7 +536,7 @@ async def select_group(interaction: discord.Interaction):
             msg = ""
 
             # Xử lý Hủy chọn (Toggle off)
-            if old_group_name == new_group_name:
+            if old_group_name and old_group_name.lower() == new_group_name.lower():
                 self.data['role_group'] = None
                 if new_role:
                     await member.remove_roles(new_role, reason="Hủy chọn Role Group")
@@ -556,6 +584,76 @@ async def select_group(interaction: discord.Interaction):
         view=RoleGroupSelect(data),
         ephemeral=True
     )
+
+# ====== Lệnh /all_in (Cược 80% số tiền) ======
+# Định nghĩa các lựa chọn cho lệnh
+CURRENCY_CHOICES = [
+    app_commands.Choice(name="Fund", value="fund"),
+    app_commands.Choice(name="Coupon", value="coupon"),
+]
+
+@bot.tree.command(name="all_in", description="Cược 80% Fund hoặc Coupon bạn đang có (Thắng x2, Thua mất hết)")
+@app_commands.describe(currency="Loại tiền tệ bạn muốn cược")
+@app_commands.choices(currency=CURRENCY_CHOICES)
+async def all_in(interaction: discord.Interaction, currency: app_commands.Choice[str]):
+    user_id = interaction.user.id
+    data = await get_user_data(user_id)
+
+    if data is None:
+        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        return
+    
+    currency_key = currency.value # 'fund' hoặc 'coupon'
+    currency_name = currency.name # 'Fund' hoặc 'Coupon'
+    currency_emoji = ROLE_IDS[f"{currency_key.upper()}_EMOJI"]
+    
+    current_balance = data.get(currency_key, 0)
+
+    # Tính số tiền cược (80% tổng số tiền, làm tròn xuống)
+    bet_amount = int(current_balance * 0.8)
+
+    if bet_amount <= 0:
+        await interaction.response.send_message(
+            f"❌ Bạn cần ít nhất 1 {currency_name} để cược 80% (cần > 1.25 {currency_name}).",
+            ephemeral=True
+        )
+        return
+    
+    # --- LOGIC CƯỢC ---
+    win = random.choice([True, False]) # 50% thắng, 50% thua
+    
+    old_balance = current_balance
+    new_balance = 0
+    gain_or_loss = 0
+    
+    if win:
+        # Thắng: nhận lại số cược + tiền thắng (tổng cộng +bet_amount)
+        data[currency_key] += bet_amount 
+        gain_or_loss = bet_amount
+        result_text = f"🎉 **THẮNG CUỘC!** Bạn đã nhân đôi số tiền cược **{bet_amount}** {currency_emoji} {currency_name}."
+    else:
+        # Thua: mất số tiền cược (-bet_amount)
+        data[currency_key] -= bet_amount
+        gain_or_loss = -bet_amount
+        result_text = f"💀 **THUA CƯỢC!** Bạn đã mất số tiền cược **{bet_amount}** {currency_emoji} {currency_name}."
+
+    new_balance = data[currency_key]
+
+    await save_user_data(user_id, data) # LƯU VÀO FIRESTORE
+
+    embed = discord.Embed(
+        title=f"🎲 ALL IN - Cược {currency_name}", 
+        description=result_text, 
+        color=discord.Color.green() if win else discord.Color.red()
+    )
+    
+    embed.add_field(name="Loại tiền cược", value=f"{currency_emoji} {currency_name}", inline=True)
+    embed.add_field(name="Số tiền cược", value=f"**{bet_amount:,}**", inline=True)
+    embed.add_field(name="Lãi/Lỗ", value=f"**{'+' if gain_or_loss >= 0 else ''}{gain_or_loss:,}**", inline=True)
+    embed.add_field(name="Số dư cũ", value=f"{old_balance:,}", inline=True)
+    embed.add_field(name="Số dư mới", value=f"**{new_balance:,}**", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
 
 
 # ====== Chạy bot ======
