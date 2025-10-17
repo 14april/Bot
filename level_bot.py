@@ -781,37 +781,58 @@ async def daily(interaction: discord.Interaction):
     )
 
 # ====== Lệnh /exchange (Quy đổi tiền tệ) ======
-@bot.tree.command(name="exchange", description="Quy đổi 1 Fund = 1 Coupon")
-@app_commands.describe(amount="Số Fund muốn quy đổi sang Coupon")
-async def exchange(interaction: discord.Interaction, amount: int):
+@bot.tree.command(name="exchange", description="Trao đổi tiền tệ: Fund 🔄 Coupon (Tỷ giá 1:1).")
+@app_commands.describe(
+    exchange_type="Chọn loại tiền bạn muốn ĐỔI.",
+    amount="Số lượng tiền muốn trao đổi (tối thiểu 100)."
+)
+@app_commands.choices(
+    exchange_type=[
+        app_commands.Choice(name="💰 Fund -> Coupon", value="fund_to_coupon"),
+        app_commands.Choice(name="🎟️ Coupon -> Fund", value="coupon_to_fund"),
+    ]
+)
+async def exchange(interaction: discord.Interaction, exchange_type: app_commands.Choice[str], amount: int):
+    await interaction.response.defer(ephemeral=True)
     user_id = interaction.user.id
     data = await get_user_data(user_id)
+    
+    MIN_AMOUNT = 100 # Đặt giới hạn trao đổi tối thiểu
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
-        return
+        return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+    
+    if amount < MIN_AMOUNT:
+        return await interaction.followup.send(f"❌ Số tiền trao đổi tối thiểu phải là **{MIN_AMOUNT:,}**.", ephemeral=True)
 
-    if amount <= 0:
-        await interaction.response.send_message("❌ Số lượng phải lớn hơn 0.", ephemeral=True)
-        return
+    if exchange_type.value == "fund_to_coupon":
+        source_key, target_key = 'current_fund', 'current_coupon'
+        source_emoji, target_emoji = ROLE_IDS.get('FUND_EMOJI', '💰'), ROLE_IDS.get('COUPON_EMOJI', '🎟️')
+        source_name, target_name = "Fund", "Coupon"
+    else:
+        source_key, target_key = 'current_coupon', 'current_fund'
+        source_emoji, target_emoji = ROLE_IDS.get('COUPON_EMOJI', '🎟️'), ROLE_IDS.get('FUND_EMOJI', '💰')
+        source_name, target_name = "Coupon", "Fund"
 
-    if data['fund'] < amount:
-        await interaction.response.send_message(
-            f"❌ Bạn không đủ Fund. Bạn chỉ có **{data['fund']}** {ROLE_IDS['FUND_EMOJI']}.",
+    source_balance = data.get(source_key, 0)
+    
+    if source_balance < amount:
+        return await interaction.followup.send(
+            f"❌ Bạn không đủ {source_name}. Bạn chỉ có **{source_balance:,}** {source_emoji}.",
             ephemeral=True
         )
-        return
 
-    data['fund'] -= amount
-    data['coupon'] += amount
+    # Thực hiện trao đổi 1:1
+    data[source_key] = source_balance - amount
+    data[target_key] = data.get(target_key, 0) + amount
 
     await save_user_data(user_id, data) # LƯU VÀO FIRESTORE
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"✅ Quy đổi thành công!\n"
-        f"Đã trừ **{amount}** {ROLE_IDS['FUND_EMOJI']} Fund.\n"
-        f"Đã thêm **{amount}** {ROLE_IDS['COUPON_EMOJI']} Coupon.\n"
-        f"Số dư Fund mới: **{data['fund']}**. Số dư Coupon mới: **{data['coupon']}**.",
+        f"Đã trừ **{amount:,}** {source_emoji} {source_name}.\n"
+        f"Đã thêm **{amount:,}** {target_emoji} {target_name}.\n"
+        f"Số dư {source_name} mới: **{data[source_key]:,}**. Số dư {target_name} mới: **{data[target_key]:,}**.",
         ephemeral=True
     )
 
@@ -971,7 +992,122 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
     
     await interaction.response.send_message(embed=embed)
 
+# ====== Lệnh /transfer (Chuyển tiền tệ cho người khác) ======
+@bot.tree.command(name="transfer", description="Chuyển Fund/Coupon cho người chơi khác.")
+@app_commands.describe(
+    recipient="Người chơi bạn muốn chuyển tiền cho.",
+    currency_type="Chọn loại tiền muốn chuyển.",
+    amount="Số lượng muốn chuyển (tối thiểu 100)."
+)
+@app_commands.choices(
+    currency_type=[
+        app_commands.Choice(name="💰 Fund", value="fund"),
+        app_commands.Choice(name="🎟️ Coupon", value="coupon"),
+    ]
+)
+async def transfer_command(interaction: discord.Interaction, recipient: discord.Member, currency_type: app_commands.Choice[str], amount: int):
+    await interaction.response.defer(ephemeral=True)
+    
+    sender_id = str(interaction.user.id)
+    recipient_id = str(recipient.id)
+    MIN_TRANSFER = 100
+    
+    if interaction.user.id == recipient.id:
+        return await interaction.followup.send("❌ Bạn không thể chuyển tiền cho chính mình.", ephemeral=True)
+    
+    if amount < MIN_TRANSFER:
+        return await interaction.followup.send(f"❌ Số tiền chuyển tối thiểu là **{MIN_TRANSFER:,}**.", ephemeral=True)
 
+    # Định nghĩa khóa và emoji
+    currency_key = f"current_{currency_type.value}"
+    currency_name = currency_type.name
+    currency_emoji = ROLE_IDS.get(f"{currency_type.value.upper()}_EMOJI", '❓')
+
+    # Lấy dữ liệu người gửi
+    sender_data = await get_user_data(sender_id)
+    sender_balance = sender_data.get(currency_key, 0)
+
+    # 1. Kiểm tra số dư người gửi
+    if sender_balance < amount:
+        return await interaction.followup.send(f"❌ Số dư {currency_name} của bạn không đủ ({sender_balance:,}{currency_emoji}) để chuyển **{amount:,}**.", ephemeral=True)
+
+    # 2. Xử lý chuyển tiền
+    recipient_data = await get_user_data(recipient_id)
+
+    # Cập nhật người gửi
+    sender_data[currency_key] = sender_balance - amount
+    await save_user_data(sender_id, sender_data)
+
+    # Cập nhật người nhận
+    recipient_data[currency_key] = recipient_data.get(currency_key, 0) + amount
+    await save_user_data(recipient_id, recipient_data)
+
+    # 3. Phản hồi
+    embed = discord.Embed(
+        title=f"💸 Chuyển {currency_name} Thành Công",
+        description=f"Bạn đã chuyển **{amount:,}** {currency_emoji} {currency_name} cho {recipient.mention}.",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Người nhận", value=recipient.display_name, inline=True)
+    embed.add_field(name="Số dư mới của bạn", value=f"{sender_data[currency_key]:,} {currency_emoji}", inline=True)
+    
+    await interaction.followup.send(embed=embed)
+    # ====== Lệnh /buff (Owner Only: Thêm tiền tệ) ======
+@bot.tree.command(name="buff", description="[OWNER ONLY] Thêm Fund/Coupon cho người chơi.")
+@app_commands.describe(
+    target_member="Người chơi cần buff.",
+    currency_type="Chọn loại tiền muốn thêm (Fund hoặc Coupon).",
+    amount="Số lượng muốn thêm."
+)
+@app_commands.choices(
+    currency_type=[
+        app_commands.Choice(name="💰 Fund", value="fund"),
+        app_commands.Choice(name="🎟️ Coupon", value="coupon"),
+    ]
+)
+@app_commands.is_owner() # Yêu cầu người dùng là Owner của Bot
+async def buff_command(interaction: discord.Interaction, target_member: discord.Member, currency_type: app_commands.Choice[str], amount: int):
+    await interaction.response.defer(ephemeral=True)
+    
+    if amount <= 0:
+        return await interaction.followup.send("❌ Số tiền thêm phải lớn hơn 0.", ephemeral=True)
+
+    target_id = str(target_member.id)
+    currency_key = f"current_{currency_type.value}"
+    currency_name = currency_type.name
+    currency_emoji = ROLE_IDS.get(f"{currency_type.value.upper()}_EMOJI", '❓')
+
+    # Lấy và cập nhật dữ liệu
+    data = await get_user_data(target_id)
+    data[currency_key] = data.get(currency_key, 0) + amount
+    await save_user_data(target_id, data)
+
+    # 1. Gửi thông báo cho Admin
+    admin_embed = discord.Embed(
+        title=f"✅ BUFF {currency_name} Thành Công",
+        description=f"Đã thêm **{amount:,}** {currency_emoji} {currency_name} cho {target_member.mention}.",
+        color=discord.Color.green()
+    )
+    admin_embed.add_field(name="Số dư mới", value=f"{data[currency_key]:,} {currency_emoji}")
+    await interaction.followup.send(embed=admin_embed)
+    
+    # 2. Gửi thông báo riêng cho người chơi (Optional)
+    try:
+        target_embed = discord.Embed(
+            title="🎁 Nhận Quà Buff!",
+            description=f"Bạn vừa nhận được **{amount:,}** {currency_emoji} {currency_name} từ Owner.",
+            color=discord.Color.gold()
+        )
+        await target_member.send(embed=target_embed)
+    except discord.errors.Forbidden:
+        pass # Không thể gửi DM
+
+@buff_command.error
+async def buff_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingOwner):
+        await interaction.response.send_message("⛔ Lệnh này chỉ dành cho Owner của Bot.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Đã xảy ra lỗi: {error}", ephemeral=True)
 # ====== Chạy bot ======
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
