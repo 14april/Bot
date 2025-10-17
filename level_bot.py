@@ -869,10 +869,10 @@ async def select_group(interaction: discord.Interaction):
                 msg += f"✅ Bạn đã chọn nhóm **{new_group_name.upper()}**."
 
                 # Reset Level/XP nếu đổi nhóm
-                if old_group_name and old_group_name != new_group_name:
-                    # self.data['level'] = 0 # Đã chú thích/xóa để KHÔNG reset
-                    # self.data['xp'] = 0 # Đã chú thích/xóa để KHÔNG reset
-              pass # Giữ nguyên Level và XP khi đổi nhóm
+                if old_group_name and old_group_name != new_group_name: # <--- Căn lề 12 spaces
+                # self.data['level'] = 0
+                # self.data['xp'] = 0
+                pass # Giữ nguyên Level và XP khi đổi nhóm
                 
                 # Tự động cấp Rank mới sau khi chọn nhóm
                 await update_user_level_and_roles(member, self.data)
