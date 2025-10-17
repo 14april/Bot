@@ -4,7 +4,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 import random
 import json
-import math
 import asyncio
 
 import discord
@@ -22,8 +21,10 @@ from firebase_admin import credentials, firestore
 
 # COLLECTION_NAME là nơi lưu trữ data người dùng trong Firestore
 COLLECTION_NAME = 'discord_bot_users'
+# COLLECTION_FOR_CONFIG là nơi lưu trữ ID tin nhắn Reaction Role
+CONFIG_COLLECTION = 'discord_bot_config'
+CONFIG_DOC_ID = 'reaction_roles' # Document chứa cấu hình reaction role
 
-# Dữ liệu sẽ được cache tạm thời, nhưng nguồn chính là Firestore
 db = None
 
 # Cấu hình Role ID (BẠN CẦN THAY THẾ CHÚNG BẰNG ID THỰC CỦA SERVER BẠN)
@@ -71,6 +72,12 @@ XP_SCALING = 1.5
 # Cooldown nhận XP khi nhắn tin
 XP_COOLDOWN_SECONDS = 5
 
+# Cấu hình Reaction Role để dễ dàng truy cập
+REACTION_ROLES_CONFIG = {
+    "⚔️": "HERO_GROUP", # Role ID cho Hero Group
+    "👹": "MONSTER_GROUP", # Role ID cho Monster Group
+}
+
 
 # ====== Fake web server để Render không bị kill ======
 class PingServer(BaseHTTPRequestHandler):
@@ -89,6 +96,9 @@ threading.Thread(target=run_server, daemon=True).start()
 
 # ====== Cấu hình intents và bot ======
 intents = discord.Intents.default()
+# Cần các intents này cho Reaction Role và on_message
+intents.members = True 
+intents.reactions = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -105,7 +115,6 @@ def initialize_firestore():
         return
 
     try:
-        # Lấy nội dung JSON của Service Account từ biến môi trường
         cred_json = os.getenv("FIREBASE_CREDENTIALS")
         if not cred_json:
             print("❌ Lỗi: Không tìm thấy biến môi trường FIREBASE_CREDENTIALS.")
@@ -114,7 +123,6 @@ def initialize_firestore():
         cred_dict = json.loads(cred_json)
         cred = credentials.Certificate(cred_dict)
 
-        # Khởi tạo ứng dụng Firebase. Nếu đã khởi tạo rồi thì không gọi lại.
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
             
@@ -123,17 +131,15 @@ def initialize_firestore():
 
     except Exception as e:
         print(f"❌ Lỗi khởi tạo Firebase/Firestore: {e}. Vui lòng kiểm tra FIREBASE_CREDENTIALS.")
-        db = None # Đảm bảo db là None nếu thất bại
+        db = None 
 
 
 async def get_user_data(user_id):
     """Lấy dữ liệu người dùng từ Firestore. Nếu chưa có, trả về dữ liệu mặc định."""
     global db
     if db is None:
-        # Thử khởi tạo lại DB trong trường hợp on_ready chưa chạy hoặc thất bại
         initialize_firestore() 
         if db is None:
-            # Nếu vẫn không kết nối được sau khi thử lại, trả về None
             return None 
 
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
@@ -143,16 +149,22 @@ async def get_user_data(user_id):
             data = doc.to_dict()
 
             # Xử lý các trường datetime từ Firestore Timestamp
-            # SỬA LỖI Ở ĐÂY: Thay firestore.client.datetime.datetime bằng datetime chuẩn
             if data.get('last_xp_message') and isinstance(data['last_xp_message'], datetime):
                 data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
             else:
-                data['last_xp_message'] = datetime.min
+                # Firestore Timestamp cần được chuyển thành datetime object
+                if data.get('last_xp_message') and isinstance(data['last_xp_message'], firestore.client.datetime):
+                    data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
+                else:
+                     data['last_xp_message'] = datetime.min
 
             if data.get('last_daily') and isinstance(data['last_daily'], datetime):
                 data['last_daily'] = data['last_daily'].replace(tzinfo=None)
             else:
-                data['last_daily'] = None
+                 if data.get('last_daily') and isinstance(data['last_daily'], firestore.client.datetime):
+                    data['last_daily'] = data['last_daily'].replace(tzinfo=None)
+                 else:
+                    data['last_daily'] = None
 
             return data
         else:
@@ -177,7 +189,6 @@ async def save_user_data(user_id, data):
     """Lưu dữ liệu người dùng vào Firestore."""
     global db
     if db is None:
-        # Thử khởi tạo lại DB trong trường hợp on_ready chưa chạy hoặc thất bại
         initialize_firestore() 
         if db is None:
             print(f"🛑 Không thể lưu dữ liệu cho user {user_id}. DB chưa sẵn sàng.")
@@ -188,16 +199,65 @@ async def save_user_data(user_id, data):
     # Chuẩn bị dữ liệu để lưu
     data_to_save = data.copy()
 
-    # Xử lý datetime.min để lưu trữ thành Server Timestamp
+    # Xử lý datetime.min để lưu trữ thành Server Timestamp lần đầu (nếu cần)
     if data_to_save.get('last_xp_message') == datetime.min:
         data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
+    
+    # Chuyển đổi datetime object sang firestore.SERVER_TIMESTAMP nếu cần thiết (để bảo toàn type)
+    if data_to_save.get('last_xp_message') and isinstance(data_to_save['last_xp_message'], datetime):
+        data_to_save['last_xp_message'] = firestore.firestore.Datetime(data_to_save['last_xp_message'].year, data_to_save['last_xp_message'].month, data_to_save['last_xp_message'].day, data_to_save['last_xp_message'].hour, data_to_save['last_xp_message'].minute, data_to_save['last_xp_message'].second, data_to_save['last_xp_message'].microsecond)
+    
+    if data_to_save.get('last_daily') and isinstance(data_to_save['last_daily'], datetime):
+        data_to_save['last_daily'] = firestore.firestore.Datetime(data_to_save['last_daily'].year, data_to_save['last_daily'].month, data_to_save['last_daily'].day, data_to_save['last_daily'].hour, data_to_save['last_daily'].minute, data_to_save['last_daily'].second, data_to_save['last_daily'].microsecond)
+
 
     try:
         doc_ref.set(data_to_save)
     except Exception as e:
         print(f"❌ Lỗi khi lưu dữ liệu cho user {user_id}: {e}")
-        # Rất có thể là lỗi kết nối/mạng, đặt db về None để kích hoạt khởi tạo lại
-        db = None 
+        db = None
+
+async def get_reaction_message_ids():
+    """Lấy Message ID và Channel ID của tin nhắn Reaction Role từ Firestore."""
+    if db is None: return {}
+    
+    doc_ref = db.collection(CONFIG_COLLECTION).document(CONFIG_DOC_ID)
+    try:
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict().get('messages', {})
+        return {}
+    except Exception as e:
+        print(f"❌ Lỗi khi lấy cấu hình Reaction Role: {e}")
+        return {}
+
+async def save_reaction_message_id(guild_id, message_id, channel_id):
+    """Lưu Message ID và Channel ID của tin nhắn Reaction Role vào Firestore."""
+    if db is None: return
+    
+    doc_ref = db.collection(CONFIG_COLLECTION).document(CONFIG_DOC_ID)
+    try:
+        # Sử dụng Transactions để đảm bảo cập nhật an toàn
+        @firestore.transactional
+        def update_config_transaction(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            
+            # Lấy data cũ hoặc khởi tạo nếu chưa có
+            config_data = snapshot.to_dict() or {'messages': {}}
+            
+            # Cấu trúc: messages: {guild_id: {message_id: message_id, channel_id: channel_id}}
+            config_data['messages'][str(guild_id)] = {
+                'message_id': str(message_id),
+                'channel_id': str(channel_id)
+            }
+            
+            transaction.set(doc_ref, config_data)
+        
+        transaction = db.transaction()
+        update_config_transaction(transaction)
+        
+    except Exception as e:
+        print(f"❌ Lỗi khi lưu cấu hình Reaction Role: {e}")
 
 
 # ==============================================================================
@@ -206,7 +266,6 @@ async def save_user_data(user_id, data):
 
 def get_required_xp(level):
     """Tính XP cần thiết để lên level tiếp theo."""
-    # Công thức: BASE * (Level + 1) ^ SCALING
     return int(BASE_XP_TO_LEVEL * (level + 1) ** XP_SCALING)
 
 def get_current_rank_role(data):
@@ -244,8 +303,8 @@ async def update_user_level_and_roles(member, data):
 
     while data['xp'] >= get_required_xp(new_level):
         # Kiểm tra giới hạn level cho nhóm hiện tại
-        if (data['role_group'] == 'HERO' and new_level >= max_level_hero and new_level >= max_level_hero) or \
-           (data['role_group'] == 'MONSTER' and new_level >= max_level_monster and new_level >= max_level_monster):
+        if (data['role_group'] == 'HERO' and new_level >= max_level_hero) or \
+           (data['role_group'] == 'MONSTER' and new_level >= max_level_monster):
             # Đã đạt max level, thoát vòng lặp
             break 
 
@@ -254,7 +313,6 @@ async def update_user_level_and_roles(member, data):
         level_up_occurred = True
         
         # --- THÊM THƯỞNG NGẪU NHIÊN KHI LÊN CẤP ---
-        # Thưởng Fund ngẫu nhiên (50-150) và Coupon ngẫu nhiên (10-30)
         reward_fund = random.randint(50, 150)
         reward_coupon = random.randint(10, 30)
         
@@ -275,7 +333,7 @@ async def update_user_level_and_roles(member, data):
         # Lưu lại vì Level, XP và Tiền tệ đã thay đổi
         await save_user_data(member.id, data)
 
-    # 2. Xử lý Auto Role Rank
+    # 2. Xử lý Auto Role Rank (Logic này đã TỐT, đảm bảo gỡ Role Rank cũ)
     if data['role_group']:
         new_role_id = get_current_rank_role(data)
 
@@ -314,18 +372,17 @@ async def update_user_level_and_roles(member, data):
 async def on_ready():
     global db
     retry_count = 0
-    max_retries = 10 # Tăng số lần thử lại để chịu lỗi tốt hơn
+    max_retries = 10 
 
     # --- Đảm bảo DB được kết nối trước khi tiếp tục ---
     while db is None and retry_count < max_retries:
         print(f"🔄 Thử kết nối Firestore lần {retry_count + 1}...")
-        initialize_firestore() # Gọi hàm khởi tạo đồng bộ
+        initialize_firestore() 
         if db is None:
             retry_count += 1
-            # Chờ một khoảng thời gian tăng dần: 2, 4, 6... giây
             await asyncio.sleep(2 * retry_count) 
         else:
-            break # Kết nối thành công
+            break 
 
     if db is None:
         print("🛑 Lỗi nghiêm trọng: KHÔNG THỂ kết nối Firestore sau nhiều lần thử.")
@@ -338,10 +395,10 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Lỗi sync command: {e}")
 
+
 # ====== Lắng nghe tin nhắn để tính XP ======
 @bot.event
 async def on_message(message):
-    # Tránh bot tự phản hồi hoặc DB chưa sẵn sàng
     if message.author.bot or db is None:
         await bot.process_commands(message)
         return
@@ -351,19 +408,18 @@ async def on_message(message):
         return
 
     user_id = message.author.id
-    # Lấy data bất đồng bộ từ Firestore (hàm này sẽ thử initialize DB nếu cần)
     data = await get_user_data(user_id)
     if data is None:
         await bot.process_commands(message)
         return
 
-    # Giới hạn XP: chỉ nhận XP sau XP_COOLDOWN_SECONDS giây kể từ tin nhắn cuối cùng
+    # Giới hạn XP: chỉ nhận XP sau XP_COOLDOWN_SECONDS giây
     MIN_XP_COOLDOWN = timedelta(seconds=XP_COOLDOWN_SECONDS)
     last_xp = data.get('last_xp_message', datetime.min)
 
-    # Đảm bảo last_xp là datetime object (nếu không, đặt lại thành datetime.min)
     if not isinstance(last_xp, datetime):
-        last_xp = datetime.min
+         # Cần xử lý lại nếu last_xp không phải là datetime (ví dụ: bị lưu thành timestamp)
+        last_xp = datetime.min 
 
     time_since_last_msg = datetime.now() - last_xp
 
@@ -375,13 +431,225 @@ async def on_message(message):
         # Cập nhật Level và Role (hàm này sẽ gọi save_user_data nếu level thay đổi)
         await update_user_level_and_roles(message.author, data)
 
-        # Luôn lưu lại XP và last_xp_message (trừ khi đã được lưu trong update_user_level_and_roles)
-        # Tải lại data để so sánh level cũ, tránh trường hợp bị mất data nếu update_user_level_and_roles đã save
+        # Nếu không level up, vẫn cần lưu lại XP và last_xp_message
         current_db_data = await get_user_data(user_id)
-        if current_db_data and data['level'] == current_db_data.get('level', 0):
+        if current_db_data and data.get('level', 0) == current_db_data.get('level', 0):
+             # Chỉ lưu lại nếu không có thay đổi level (để tránh race condition)
             await save_user_data(user_id, data)
 
     await bot.process_commands(message)
+
+
+# ==============================================================================
+# REACTION ROLE LOGIC (NEW)
+# ==============================================================================
+
+@bot.tree.command(name="setup_roles_msg", description="[ADMIN ONLY] Thiết lập tin nhắn Reaction Role.")
+@commands.has_permissions(administrator=True)
+async def setup_roles_msg(interaction: discord.Interaction):
+    # Lấy ID của các Role Group chính
+    HERO_ROLE_ID = ROLE_IDS["HERO_GROUP"]
+    MONSTER_ROLE_ID = ROLE_IDS["MONSTER_GROUP"]
+    
+    # Kiểm tra xem các Role đã được định nghĩa chưa
+    if not HERO_ROLE_ID or not MONSTER_ROLE_ID:
+        await interaction.response.send_message(
+            "❌ Lỗi cấu hình: Vui lòng thay thế ID mẫu trong **ROLE_IDS** bằng ID Hero Group và Monster Group thực tế của bạn.",
+            ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(
+        title="⚔️ CHỌN PHE CỦA BẠN 👹", 
+        description=(
+            "Vui lòng bấm vào biểu tượng cảm xúc để chọn nhóm vai trò chính:\n\n"
+            "**🦸‍♂️ Hero:** Bấm **⚔️** để nhận Role Hero.\n"
+            "**👾 Monster:** Bấm **👹** để nhận Role Monster.\n\n"
+            "**Cách đổi/hủy:** Bấm lại vào Reaction đang chọn để hủy. Sau đó bấm vào Reaction khác để đổi phe. Việc này sẽ reset Rank của nhóm cũ về 0."
+        ),
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="Chọn phe sẽ kích hoạt hệ thống Level & Rank của bot.")
+
+    # Gửi tin nhắn và thêm Reactions
+    await interaction.response.send_message("Đang thiết lập tin nhắn...", ephemeral=True)
+    
+    try:
+        # Gửi tin nhắn vào kênh hiện tại
+        message = await interaction.channel.send(embed=embed)
+        await message.add_reaction("⚔️")
+        await message.add_reaction("👹")
+        
+        # LƯU MESSAGE ID VÀ CHANNEL ID vào Firestore
+        await save_reaction_message_id(interaction.guild_id, message.id, interaction.channel_id)
+        
+        await interaction.edit_original_response(
+            content=f"✅ Đã thiết lập tin nhắn Reaction Role thành công! Vui lòng pin (ghim) tin nhắn này."
+        )
+
+    except Exception as e:
+        print(f"Lỗi khi thiết lập Reaction Role: {e}")
+        await interaction.edit_original_response(
+            content="❌ Lỗi: Bot không thể gửi tin nhắn hoặc thêm reactions (kiểm tra quyền)."
+        )
+
+# Xử lý khi người dùng BẤM Reaction (Reaction Add)
+@bot.event
+async def on_raw_reaction_add(payload):
+    # Bỏ qua nếu Reaction là của bot hoặc nếu DB chưa sẵn sàng
+    if payload.member.bot or db is None:
+        return
+
+    # Lấy thông tin Message ID của tin nhắn Reaction Role đã lưu
+    config = await get_reaction_message_ids()
+    guild_config = config.get(str(payload.guild_id))
+
+    if not guild_config or payload.message_id != int(guild_config['message_id']):
+        return # Không phải tin nhắn Reaction Role cần xử lý
+
+    guild = bot.get_guild(payload.guild_id)
+    if not guild: return
+    
+    member = guild.get_member(payload.user_id)
+    if not member: return
+
+    # Ánh xạ Reaction Emoji sang Role Key
+    emoji_name = payload.emoji.name
+    role_key = REACTION_ROLES_CONFIG.get(emoji_name)
+
+    if not role_key:
+        return # Không phải emoji Hero/Monster
+
+    new_role_id = ROLE_IDS.get(role_key)
+    if not new_role_id: return
+
+    new_role = guild.get_role(new_role_id)
+    if not new_role: return
+
+    # Lấy data người dùng từ Firestore
+    user_data = await get_user_data(payload.user_id)
+    if user_data is None: return
+
+    # --- LOGIC CHỌN/ĐỔI ROLE ---
+    
+    # 1. Xác định Role Group cũ (nếu có)
+    old_group_name = user_data.get('role_group')
+    new_group_name = 'HERO' if role_key == 'HERO_GROUP' else 'MONSTER'
+    
+    # Nếu người dùng bấm lại vào Role Group đã chọn (hành vi hủy/bỏ qua)
+    if old_group_name == new_group_name:
+        # Giữ nguyên Role hiện tại. Discord sẽ tự động thêm Reaction, 
+        # nhưng chúng ta không cần làm gì thêm ở đây nếu đã có Role.
+        # Logic Hủy sẽ nằm trong on_raw_reaction_remove.
+        
+        # Nếu đã có Role Group này, không cần làm gì
+        if member.roles.cache.has(new_role_id):
+            return 
+    
+    # 2. Xử lý đổi nhóm (Remove Role cũ và Rank cũ)
+    
+    # Lấy ID Role Group cũ
+    old_role_id = ROLE_IDS[f"{old_group_name.upper()}_GROUP"] if old_group_name else None
+    
+    # Nếu có Role Group cũ và nó khác Role Group mới
+    if old_group_name and old_group_name != new_group_name:
+        old_role = guild.get_role(old_role_id)
+        if old_role and old_role in member.roles:
+            await member.remove_roles(old_role, reason="Reaction Role: Đổi nhóm - Gỡ nhóm cũ")
+            
+        # Gỡ TẤT CẢ Role Rank cũ của nhóm đó (ví dụ: gỡ HERO_C, HERO_B...)
+        group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
+        all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
+                                 if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
+        
+        roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason="Reaction Role: Đổi nhóm - Gỡ Rank cũ")
+
+    # 3. Gán Role Group mới
+    if new_role not in member.roles:
+        await member.add_roles(new_role, reason="Reaction Role: Chọn nhóm mới")
+
+    # 4. Cập nhật data trong Firestore
+    user_data['role_group'] = new_group_name
+    
+    # Reset level và xp về 0 nếu đổi nhóm (vì Rank phụ thuộc Level)
+    if old_group_name and old_group_name != new_group_name:
+        # user_data['level'] = 0 #reset về 0 khi chuyển nhóm
+        # user_data['xp'] = 0 #reset về 0 khi chuyển nhóm
+        pass # Giữ nguyên Level và XP khi đổi nhóm
+    await save_user_data(payload.user_id, user_data)
+    
+    # Tự động cấp Rank (sẽ cấp Rank level 1 nếu level > 0)
+    await update_user_level_and_roles(member, user_data)
+
+    # (Tuỳ chọn) Gửi tin nhắn thông báo
+    channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+    if channel and member.roles.cache.has(new_role_id):
+        try:
+            await channel.send(f"✅ {member.mention} đã chọn nhóm **{new_group_name}**!", delete_after=5)
+        except:
+             pass # Có thể bot không có quyền gửi tin nhắn trong kênh đó
+
+
+# Xử lý khi người dùng BỎ Reaction (Reaction Remove)
+@bot.event
+async def on_raw_reaction_remove(payload):
+    # Bỏ qua nếu DB chưa sẵn sàng
+    if db is None: return
+    
+    # Lấy thông tin Message ID của tin nhắn Reaction Role đã lưu
+    config = await get_reaction_message_ids()
+    guild_config = config.get(str(payload.guild_id))
+
+    if not guild_config or payload.message_id != int(guild_config['message_id']):
+        return # Không phải tin nhắn Reaction Role cần xử lý
+    
+    guild = bot.get_guild(payload.guild_id)
+    if not guild: return
+
+    # Lấy member (cần thiết vì payload.member không tồn tại trong remove)
+    member = guild.get_member(payload.user_id)
+    if not member or member.bot: return
+
+    # Ánh xạ Reaction Emoji sang Role Key
+    emoji_name = payload.emoji.name
+    role_key = REACTION_ROLES_CONFIG.get(emoji_name)
+
+    if not role_key: return
+
+    role_id_to_remove = ROLE_IDS.get(role_key)
+    if not role_id_to_remove: return
+
+    role_to_remove = guild.get_role(role_id_to_remove)
+    if not role_to_remove: return
+
+    # --- LOGIC HỦY ROLE ---
+    
+    # Nếu người dùng bỏ Reaction, ta HỦY Role Group và gỡ Rank tương ứng
+    if role_to_remove in member.roles:
+        
+        # 1. Gỡ Role Group
+        await member.remove_roles(role_to_remove, reason="Reaction Role: Hủy chọn nhóm")
+        
+        # 2. Gỡ TẤT CẢ Role Rank cũ của nhóm đó
+        group_name = 'HERO' if role_key == 'HERO_GROUP' else 'MONSTER'
+        group_prefix = 'HERO' if group_name == 'HERO' else 'M_' 
+        
+        all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
+                                 if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
+        
+        roles_to_remove_rank = [r for r in member.roles if r.id in all_rank_roles_ids]
+        if roles_to_remove_rank:
+            await member.remove_roles(*roles_to_remove_rank, reason="Reaction Role: Hủy nhóm - Gỡ Rank")
+
+        # 3. Cập nhật data trong Firestore: reset role_group, level, xp
+        user_data = await get_user_data(payload.user_id)
+        if user_data:
+            user_data['role_group'] = None
+            user_data['level'] = 0
+            user_data['xp'] = 0
+            await save_user_data(payload.user_id, user_data)
 
 
 # ====== Lệnh /buff_xp (CHỈ DÀNH CHO GUILD OWNER) ======
@@ -405,6 +673,11 @@ async def buff_xp(interaction: discord.Interaction, member: discord.Member, amou
     if data is None:
         await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
         return
+    
+    if data['role_group'] is None:
+        await interaction.response.send_message("❌ Người dùng chưa chọn Role Group (Hero/Monster). Vui lòng dùng lệnh `/select` hoặc Reaction Role.", ephemeral=True)
+        return
+
 
     old_level = data['level']
     data['xp'] += amount
@@ -536,7 +809,7 @@ async def exchange(interaction: discord.Interaction, amount: int):
         ephemeral=True
     )
 
-# ====== Lệnh /select (Chọn Role Group Hero/Monster) ======
+# ====== Lệnh /select (Vẫn giữ lại cho người thích dùng lệnh) ======
 @bot.tree.command(name="select", description="Chọn nhóm vai trò chính: Hero hoặc Monster")
 async def select_group(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -576,7 +849,7 @@ async def select_group(interaction: discord.Interaction):
                 # Gỡ tất cả role rank cũ
                 group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
                 all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                          if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
+                                         if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
                 
                 roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
                 if roles_to_remove:
@@ -595,6 +868,12 @@ async def select_group(interaction: discord.Interaction):
 
                 msg += f"✅ Bạn đã chọn nhóm **{new_group_name.upper()}**."
 
+                # Reset Level/XP nếu đổi nhóm
+                if old_group_name and old_group_name != new_group_name:
+                    # self.data['level'] = 0 # Đã chú thích/xóa để KHÔNG reset
+                    # self.data['xp'] = 0 # Đã chú thích/xóa để KHÔNG reset
+		      pass # Giữ nguyên Level và XP khi đổi nhóm
+                
                 # Tự động cấp Rank mới sau khi chọn nhóm
                 await update_user_level_and_roles(member, self.data)
 
