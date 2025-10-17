@@ -4,7 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 import random
 import json
-import math # Import math để dùng math.floor (hoặc dùng int() cho đơn giản)
+import math
+import asyncio
 
 import discord
 from discord import app_commands
@@ -27,17 +28,17 @@ db = None
 
 # Cấu hình Role ID (BẠN CẦN THAY THẾ CHÚNG BẰNG ID THỰC CỦA SERVER BẠN)
 ROLE_IDS = {
-    # Nhóm vai trò chính
-    "HERO_GROUP": 123456789012345678,
-    "MONSTER_GROUP": 123456789012345679,
+    # Nhóm vai trò chính (ID MẪU - CẦN THAY)
+    "HERO_GROUP": 1428605131372494888, 
+    "MONSTER_GROUP": 1428606008678289418,
 
-    # Hero Ranks (C, B, A, S)
+    # Hero Ranks (ID MẪU - CẦN THAY)
     "HERO_C": 1428609299550175293,
     "HERO_B": 1428609397906477116,
     "HERO_A": 1428609426117492756,
     "HERO_S": 1428609449173454859,
 
-    # Monster Ranks (Tiger, Demon, Dragon, God)
+    # Monster Ranks (ID MẪU - CẦN THAY)
     "M_TIGER_LOW": 1428609481549414493,
     "M_TIGER_MID": 1428609524826112121,
     "M_TIGER_HIGH": 1428609554794418267,
@@ -49,7 +50,7 @@ ROLE_IDS = {
     "M_DRAGON_HIGH": 1428655242936975392,
     "M_GOD": 1428609742116225034,
 
-    # Tiền tệ (Emoji/Icon)
+    # Tiền tệ (Emoji/Icon ID MẪU - CẦN THAY)
     "FUND_EMOJI": "<:fund:1378705631426646016>",
     "COUPON_EMOJI": "<:coupon:1428342053548462201>",
 }
@@ -67,10 +68,8 @@ LEVEL_TIERS = {
 BASE_XP_TO_LEVEL = 100
 XP_SCALING = 1.5
 
-# --- CẬP NHẬT THEO YÊU CẦU ---
-# Giảm cooldown nhận XP khi nhắn tin từ 60s xuống 5s
+# Cooldown nhận XP khi nhắn tin
 XP_COOLDOWN_SECONDS = 5
-# -----------------------------
 
 
 # ====== Fake web server để Render không bị kill ======
@@ -144,15 +143,16 @@ async def get_user_data(user_id):
             data = doc.to_dict()
 
             # Xử lý các trường datetime từ Firestore Timestamp
-            if data.get('last_xp_message') and isinstance(data['last_xp_message'], firestore.client.datetime.datetime):
+            # SỬA LỖI Ở ĐÂY: Thay firestore.client.datetime.datetime bằng datetime chuẩn
+            if data.get('last_xp_message') and isinstance(data['last_xp_message'], datetime):
                 data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
             else:
-                 data['last_xp_message'] = datetime.min
+                data['last_xp_message'] = datetime.min
 
-            if data.get('last_daily') and isinstance(data['last_daily'], firestore.client.datetime.datetime):
+            if data.get('last_daily') and isinstance(data['last_daily'], datetime):
                 data['last_daily'] = data['last_daily'].replace(tzinfo=None)
             else:
-                 data['last_daily'] = None
+                data['last_daily'] = None
 
             return data
         else:
@@ -170,8 +170,6 @@ async def get_user_data(user_id):
 
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu cho user {user_id}: {e}")
-        # Rất có thể là lỗi kết nối/mạng, đặt db về None để kích hoạt khởi tạo lại
-        db = None 
         return None
 
 
@@ -190,9 +188,8 @@ async def save_user_data(user_id, data):
     # Chuẩn bị dữ liệu để lưu
     data_to_save = data.copy()
 
-    # Firestore có thể xử lý datetime objects, nhưng phải loại bỏ datetime.min
-    if data_to_save['last_xp_message'] == datetime.min:
-        # Sử dụng Server Timestamp nếu giá trị là datetime.min
+    # Xử lý datetime.min để lưu trữ thành Server Timestamp
+    if data_to_save.get('last_xp_message') == datetime.min:
         data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
 
     try:
@@ -200,7 +197,7 @@ async def save_user_data(user_id, data):
     except Exception as e:
         print(f"❌ Lỗi khi lưu dữ liệu cho user {user_id}: {e}")
         # Rất có thể là lỗi kết nối/mạng, đặt db về None để kích hoạt khởi tạo lại
-        db = None
+        db = None 
 
 
 # ==============================================================================
@@ -241,14 +238,14 @@ async def update_user_level_and_roles(member, data):
     
     # 1. Kiểm tra Level Up
     new_level = data['level']
-    max_level_hero = max(LEVEL_TIERS['HERO'].keys())
-    max_level_monster = max(LEVEL_TIERS['MONSTER'].keys())
+    max_level_hero = max(LEVEL_TIERS['HERO'].keys()) if LEVEL_TIERS['HERO'] else 0
+    max_level_monster = max(LEVEL_TIERS['MONSTER'].keys()) if LEVEL_TIERS['MONSTER'] else 0
     level_up_occurred = False
 
     while data['xp'] >= get_required_xp(new_level):
         # Kiểm tra giới hạn level cho nhóm hiện tại
-        if (data['role_group'] == 'HERO' and new_level >= max_level_hero) or \
-           (data['role_group'] == 'MONSTER' and new_level >= max_level_monster):
+        if (data['role_group'] == 'HERO' and new_level >= max_level_hero and new_level >= max_level_hero) or \
+           (data['role_group'] == 'MONSTER' and new_level >= max_level_monster and new_level >= max_level_monster):
             # Đã đạt max level, thoát vòng lặp
             break 
 
@@ -292,11 +289,11 @@ async def update_user_level_and_roles(member, data):
             
             # Lấy tất cả Rank Role ID của nhóm hiện tại
             all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                  if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
+                                     if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
             
             # Lọc ra các Role cũ cần gỡ (là Role Rank của nhóm đó VÀ không phải Rank mới)
             roles_to_remove = [r for r in member.roles 
-                               if r.id in all_rank_roles_ids and r.id != new_role.id]
+                                 if r.id in all_rank_roles_ids and r.id != new_role.id]
 
             if roles_to_remove:
                 await member.remove_roles(*roles_to_remove, reason="Auto Role: Gỡ Rank cũ")
@@ -316,10 +313,23 @@ async def update_user_level_and_roles(member, data):
 @bot.event
 async def on_ready():
     global db
-    if db is None:
-        initialize_firestore()
+    retry_count = 0
+    max_retries = 10 # Tăng số lần thử lại để chịu lỗi tốt hơn
+
+    # --- Đảm bảo DB được kết nối trước khi tiếp tục ---
+    while db is None and retry_count < max_retries:
+        print(f"🔄 Thử kết nối Firestore lần {retry_count + 1}...")
+        initialize_firestore() # Gọi hàm khởi tạo đồng bộ
         if db is None:
-            print("🛑 Lỗi nghiêm trọng: Không thể kết nối Firestore. Dữ liệu sẽ không được lưu trữ.")
+            retry_count += 1
+            # Chờ một khoảng thời gian tăng dần: 2, 4, 6... giây
+            await asyncio.sleep(2 * retry_count) 
+        else:
+            break # Kết nối thành công
+
+    if db is None:
+        print("🛑 Lỗi nghiêm trọng: KHÔNG THỂ kết nối Firestore sau nhiều lần thử.")
+    # -----------------------------------------------------------------------
 
     print(f"✅ Bot Level/Tiền tệ đã đăng nhập thành công: {bot.user}")
     try:
@@ -331,24 +341,19 @@ async def on_ready():
 # ====== Lắng nghe tin nhắn để tính XP ======
 @bot.event
 async def on_message(message):
+    # Tránh bot tự phản hồi hoặc DB chưa sẵn sàng
     if message.author.bot or db is None:
-        # Nếu db là None, thử khởi tạo lại ngay tại đây
-        if db is None:
-            initialize_firestore()
-            if db is None:
-                # Nếu vẫn không được, bỏ qua xử lý tin nhắn
-                await bot.process_commands(message) 
-                return
+        await bot.process_commands(message)
+        return
 
     if not isinstance(message.channel, discord.TextChannel):
         await bot.process_commands(message)
         return
 
     user_id = message.author.id
-    # Lấy data bất đồng bộ từ Firestore
+    # Lấy data bất đồng bộ từ Firestore (hàm này sẽ thử initialize DB nếu cần)
     data = await get_user_data(user_id)
     if data is None:
-        # Nếu data là None, có nghĩa là DB chưa sẵn sàng (đã thử khởi tạo lại)
         await bot.process_commands(message)
         return
 
@@ -356,7 +361,7 @@ async def on_message(message):
     MIN_XP_COOLDOWN = timedelta(seconds=XP_COOLDOWN_SECONDS)
     last_xp = data.get('last_xp_message', datetime.min)
 
-    # Đảm bảo last_xp là datetime object
+    # Đảm bảo last_xp là datetime object (nếu không, đặt lại thành datetime.min)
     if not isinstance(last_xp, datetime):
         last_xp = datetime.min
 
@@ -435,7 +440,8 @@ async def profile(interaction: discord.Interaction):
 
     # Xác định Rank hiện tại và tên
     rank_role_id = get_current_rank_role(data)
-    rank_name = interaction.guild.get_role(rank_role_id).name if rank_role_id else "Chưa xếp hạng"
+    rank_role = interaction.guild.get_role(rank_role_id) if rank_role_id else None
+    rank_name = rank_role.name if rank_role else "Chưa xếp hạng"
     group_name = data.get('role_group', 'Chưa chọn nhóm')
 
     embed = discord.Embed(title=f"👤 Thông tin Hồ sơ của {interaction.user.display_name}", color=discord.Color.blue())
@@ -570,7 +576,7 @@ async def select_group(interaction: discord.Interaction):
                 # Gỡ tất cả role rank cũ
                 group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
                 all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                      if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
+                                          if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
                 
                 roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
                 if roles_to_remove:
