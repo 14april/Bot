@@ -1065,7 +1065,7 @@ async def transfer_command(interaction: discord.Interaction, recipient: discord.
         app_commands.Choice(name="🎟️ Coupon", value="coupon"),
     ]
 )
-@app_commands.is_owner() # Yêu cầu người dùng là Owner của Bot
+@commands.is_owner() # Yêu cầu người dùng là Owner của Bot
 async def buff_command(interaction: discord.Interaction, target_member: discord.Member, currency_type: app_commands.Choice[str], amount: int):
     await interaction.response.defer(ephemeral=True)
     
@@ -1104,7 +1104,7 @@ async def buff_command(interaction: discord.Interaction, target_member: discord.
 
 @buff_command.error
 async def buff_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingOwner):
+    if isinstance(error, commands.NotOwner):
         await interaction.response.send_message("⛔ Lệnh này chỉ dành cho Owner của Bot.", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Đã xảy ra lỗi: {error}", ephemeral=True)
