@@ -591,7 +591,7 @@ async def on_raw_reaction_add(payload):
 
     # (Tuỳ chọn) Gửi tin nhắn thông báo
     channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
-    if channel and member.roles.cache.has(new_role_id):
+    if channel and any(role.id == new_role_id for role in member.roles):
         try:
             await channel.send(f"✅ {member.mention} đã chọn nhóm **{new_group_name}**!", delete_after=5)
         except:
