@@ -20,6 +20,10 @@ from firebase_admin import credentials, firestore
 # CẤU HÌNH LƯU TRỮ DỮ LIỆU VÀ ID
 # ==============================================================================
 
+# ID SERVER CỦA BẠN (BẮT BUỘC ĐỂ SYNC LỆNH / NHANH HƠN)
+# Hướng dẫn: Bật Developer Mode trong Discord, chuột phải vào server của bạn, chọn "Copy Server ID"
+GUILD_ID = 123456789012345678 # <<<<<<<<<<<< THAY THẾ BẰNG ID SERVER CỦA BẠN
+
 # COLLECTION_NAME là nơi lưu trữ data người dùng trong Firestore
 COLLECTION_NAME = 'discord_bot_users'
 # COLLECTION_FOR_CONFIG là nơi lưu trữ ID tin nhắn Reaction Role
@@ -342,12 +346,28 @@ async def on_ready():
             break 
     if db is None:
         print("🛑 Lỗi nghiêm trọng: KHÔNG THỂ kết nối Firestore sau nhiều lần thử.")
+    
     print(f"✅ Bot Level/Tiền tệ đã đăng nhập thành công: {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"🔁 Đã đồng bộ {len(synced)} lệnh slash.")
-    except Exception as e:
-        print(f"❌ Lỗi sync command: {e}")
+
+    # --- Đồng bộ lệnh slash cho một server cụ thể (nhanh hơn) ---
+    if not GUILD_ID or GUILD_ID == 123456789012345678:
+        print("⚠️ Vui lòng thay thế GUILD_ID bằng ID server của bạn để lệnh slash được cập nhật nhanh chóng.")
+        # Đồng bộ toàn cục (chậm hơn, có thể mất hàng giờ)
+        try:
+            synced = await bot.tree.sync()
+            print(f"🔁 Đã đồng bộ {len(synced)} lệnh slash (toàn cục).")
+        except Exception as e:
+            print(f"❌ Lỗi sync command (toàn cục): {e}")
+    else:
+        # Đồng bộ cho server chỉ định (gần như tức thì)
+        guild = discord.Object(id=GUILD_ID)
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"🔁 Đã đồng bộ {len(synced)} lệnh slash cho server ID: {GUILD_ID}.")
+        except Exception as e:
+            print(f"❌ Lỗi sync command cho server {GUILD_ID}: {e}")
+
 
 @bot.event
 async def on_message(message):
