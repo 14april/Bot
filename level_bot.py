@@ -470,7 +470,7 @@ async def setup_roles_msg(interaction: discord.Interaction):
             "Vui lòng bấm vào biểu tượng cảm xúc để chọn nhóm vai trò chính:\n\n"
             "**🦸‍♂️ Hero:** Bấm **⚔️** để nhận Role Hero.\n"
             "**👾 Monster:** Bấm **👹** để nhận Role Monster.\n\n"
-            "**Cách đổi/hủy:** Bấm lại vào Reaction đang chọn để hủy. Sau đó bấm vào Reaction khác để đổi phe. Việc này sẽ reset Rank của nhóm cũ về 0."
+            "**Cách đổi/hủy:** Bấm lại vào Reaction đang chọn để hủy. Sau đó bấm vào Reaction khác để đổi phe. Việc này sẽ **GIỮ NGUYÊN** Level và XP của bạn."
         ),
         color=discord.Color.gold()
     )
@@ -548,8 +548,9 @@ async def on_raw_reaction_add(payload):
         # Logic Hủy sẽ nằm trong on_raw_reaction_remove.
         
         # Nếu đã có Role Group này, không cần làm gì
-        if member.roles.cache.has(new_role_id):
-            return 
+        # This check might need `intents.guilds` to be reliable.
+        # For now, we assume if they have the group name, they have the role.
+        return 
     
     # 2. Xử lý đổi nhóm (Remove Role cũ và Rank cũ)
     
@@ -578,15 +579,12 @@ async def on_raw_reaction_add(payload):
     # 4. Cập nhật data trong Firestore
     user_data['role_group'] = new_group_name
     
-    # Reset level và xp về 0 nếu đổi nhóm (vì Rank phụ thuộc Level)
-    if old_group_name and old_group_name != new_group_name:
-        # user_data['level'] = 0 # Đã chú thích/xóa để KHÔNG reset
-        # user_data['xp'] = 0    # Đã chú thích/xóa để KHÔNG reset
-        pass # Giữ nguyên Level và XP khi đổi nhóm
+    # Giữ nguyên level và xp khi đổi nhóm
+    # (Code reset đã được xóa)
         
     await save_user_data(payload.user_id, user_data)
     
-    # Tự động cấp Rank (sẽ cấp Rank level 1 nếu level > 0)
+    # Tự động cấp Rank (sẽ cấp Rank tương ứng với level hiện tại)
     await update_user_level_and_roles(member, user_data)
 
     # (Tuỳ chọn) Gửi tin nhắn thông báo
@@ -649,12 +647,13 @@ async def on_raw_reaction_remove(payload):
         if roles_to_remove_rank:
             await member.remove_roles(*roles_to_remove_rank, reason="Reaction Role: Hủy nhóm - Gỡ Rank")
 
-        # 3. Cập nhật data trong Firestore: reset role_group, level, xp
+        # 3. Cập nhật data: chỉ reset role_group, GIỮ NGUYÊN level và xp
         user_data = await get_user_data(payload.user_id)
         if user_data:
             user_data['role_group'] = None
-            user_data['level'] = 0
-            user_data['xp'] = 0
+            # === FIX: ĐÃ XÓA CÁC DÒNG RESET LEVEL VÀ XP ===
+            # user_data['level'] = 0
+            # user_data['xp'] = 0
             await save_user_data(payload.user_id, user_data)
 
 
@@ -807,11 +806,11 @@ async def exchange(interaction: discord.Interaction, exchange_type: app_commands
         return await interaction.followup.send(f"❌ Số tiền trao đổi tối thiểu phải là **{MIN_AMOUNT:,}**.", ephemeral=True)
 
     if exchange_type.value == "fund_to_coupon":
-        source_key, target_key = 'current_fund', 'current_coupon'
+        source_key, target_key = 'fund', 'coupon'
         source_emoji, target_emoji = ROLE_IDS.get('FUND_EMOJI', '💰'), ROLE_IDS.get('COUPON_EMOJI', '🎟️')
         source_name, target_name = "Fund", "Coupon"
     else:
-        source_key, target_key = 'current_coupon', 'current_fund'
+        source_key, target_key = 'coupon', 'fund'
         source_emoji, target_emoji = ROLE_IDS.get('COUPON_EMOJI', '🎟️'), ROLE_IDS.get('FUND_EMOJI', '💰')
         source_name, target_name = "Coupon", "Fund"
 
@@ -870,9 +869,11 @@ async def select_group(interaction: discord.Interaction):
             # Xử lý Hủy chọn (Toggle off)
             if old_group_name and old_group_name.lower() == new_group_name.lower():
                 self.data['role_group'] = None
+                self.data['level'] = 0 # Giữ nguyên hoặc reset tùy bạn
+                self.data['xp'] = 0 # Giữ nguyên hoặc reset tùy bạn
                 if new_role:
                     await member.remove_roles(new_role, reason="Hủy chọn Role Group")
-                msg = f"Đã **HỦY** chọn nhóm **{new_group_name.upper()}**."
+                msg = f"Đã **HỦY** chọn nhóm **{new_group_name.upper()}**. Level và XP đã được reset."
 
                 # Gỡ tất cả role rank cũ
                 group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
@@ -896,11 +897,9 @@ async def select_group(interaction: discord.Interaction):
 
                 msg += f"✅ Bạn đã chọn nhóm **{new_group_name.upper()}**."
 
-                # Reset Level/XP nếu đổi nhóm
+                # Giữ nguyên Level/XP nếu đổi nhóm
                 if old_group_name and old_group_name != new_group_name:
-                    # self.data['level'] = 0 # Đã chú thích/xóa để KHÔNG reset
-                    # self.data['xp'] = 0    # Đã chú thích/xóa để KHÔNG reset
-                    pass # Giữ nguyên Level và XP khi đổi nhóm
+                    pass
           
                 # Tự động cấp Rank mới sau khi chọn nhóm
                 await update_user_level_and_roles(member, self.data)
