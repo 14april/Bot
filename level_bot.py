@@ -196,25 +196,7 @@ async def save_user_data(user_id, data):
             return
 
     doc_ref = db.collection(COLLECTION_NAME).document(str(user_id))
-
-    # Chuẩn bị dữ liệu để lưu
     data_to_save = data.copy()
-
-    # Xử lý datetime.min: Nếu là giá trị mặc định, chuyển thành Server Timestamp lần đầu (hoặc giữ nguyên nếu đã có)
-    if data_to_save.get('last_xp_message') == datetime.min:
-        data_to_save['last_xp_message'] = firestore.SERVER_TIMESTAMP
-        
-    if data_to_save.get('last_daily') == datetime.min:
-        data_to_save['last_daily'] = firestore.SERVER_TIMESTAMP
-
-
-    # FIX: Đã loại bỏ hoàn toàn logic chuyển đổi datetime gây lỗi ở đây (dòng 208 và 211 cũ).
-    # Các đối tượng datetime tiêu chuẩn sẽ được Firestore tự động xử lý.
-    # Logic cũ gây lỗi:
-    # if data_to_save.get('last_xp_message') and isinstance(data_to_save['last_xp_message'], datetime):
-    #     data_to_save['last_xp_message'] = datetime(...) # Dòng này gây lỗi
-    # if data_to_save.get('last_daily') and isinstance(data_to_save['last_daily'], datetime):
-    #     data_to_save['last_daily'] = datetime(...) # Dòng này gây lỗi
 
     try:
         doc_ref.set(data_to_save)
@@ -242,20 +224,14 @@ async def save_reaction_message_id(guild_id, message_id, channel_id):
     
     doc_ref = db.collection(CONFIG_COLLECTION).document(CONFIG_DOC_ID)
     try:
-        # Sử dụng Transactions để đảm bảo cập nhật an toàn
         @firestore.transactional
         def update_config_transaction(transaction):
             snapshot = doc_ref.get(transaction=transaction)
-            
-            # Lấy data cũ hoặc khởi tạo nếu chưa có
             config_data = snapshot.to_dict() or {'messages': {}}
-            
-            # Cấu trúc: messages: {guild_id: {message_id: message_id, channel_id: channel_id}}
             config_data['messages'][str(guild_id)] = {
                 'message_id': str(message_id),
                 'channel_id': str(channel_id)
             }
-            
             transaction.set(doc_ref, config_data)
         
         transaction = db.transaction()
@@ -300,30 +276,19 @@ async def update_user_level_and_roles(member, data):
     """Kiểm tra và cập nhật Level, sau đó áp dụng Role Rank mới, và THÊM THƯỞNG ngẫu nhiên."""
     guild = member.guild
     
-    # 1. Kiểm tra Level Up
     new_level = data['level']
-    max_level_hero = max(LEVEL_TIERS['HERO'].keys()) if LEVEL_TIERS['HERO'] else 0
-    max_level_monster = max(LEVEL_TIERS['MONSTER'].keys()) if LEVEL_TIERS['MONSTER'] else 0
     level_up_occurred = False
 
-    while data['xp'] >= get_required_xp(new_level):
-        # Kiểm tra giới hạn level cho nhóm hiện tại
-        if (data['role_group'] == 'HERO' and new_level >= max_level_hero) or \
-           (data['role_group'] == 'MONSTER' and new_level >= max_level_monster):
-            # Đã đạt max level, thoát vòng lặp
-            break 
-
+    while data.get('xp', 0) >= get_required_xp(new_level):
         data['xp'] -= get_required_xp(new_level)
         new_level += 1
         level_up_occurred = True
         
-        # --- THÊM THƯỞNG NGẪU NHIÊN KHI LÊN CẤP ---
         reward_fund = random.randint(50, 150)
         reward_coupon = random.randint(10, 30)
         
-        data['fund'] += reward_fund
-        data['coupon'] += reward_coupon
-        # ----------------------------------------
+        data['fund'] = data.get('fund', 0) + reward_fund
+        data['coupon'] = data.get('coupon', 0) + reward_coupon
         
         try:
             await member.send(
@@ -335,33 +300,23 @@ async def update_user_level_and_roles(member, data):
 
     if level_up_occurred:
         data['level'] = new_level
-        # Lưu lại vì Level, XP và Tiền tệ đã thay đổi
         await save_user_data(member.id, data)
 
-    # 2. Xử lý Auto Role Rank (Logic này đã TỐT, đảm bảo gỡ Role Rank cũ)
-    if data['role_group']:
+    if data.get('role_group'):
         new_role_id = get_current_rank_role(data)
-
         if new_role_id:
             new_role = guild.get_role(new_role_id)
-            if not new_role:
-                return
+            if not new_role: return
 
-            # Xác định prefix của Rank Role để gỡ các Rank cũ
-            group_prefix = 'HERO' if data['role_group'] == 'HERO' else 'M_' 
-            
-            # Lấy tất cả Rank Role ID của nhóm hiện tại
+            group_prefix = 'HERO' if data['role_group'] == 'HERO' else 'M_'
             all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
                                      if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
-            
-            # Lọc ra các Role cũ cần gỡ (là Role Rank của nhóm đó VÀ không phải Rank mới)
             roles_to_remove = [r for r in member.roles 
                                  if r.id in all_rank_roles_ids and r.id != new_role.id]
 
             if roles_to_remove:
                 await member.remove_roles(*roles_to_remove, reason="Auto Role: Gỡ Rank cũ")
-
-            if new_role and new_role not in member.roles:
+            if new_role not in member.roles:
                 await member.add_roles(new_role, reason="Auto Role: Cấp Rank mới")
                 try:
                     await member.send(f"🌟 Bạn đã được thăng cấp Rank thành **{new_role.name}**!")
@@ -372,14 +327,11 @@ async def update_user_level_and_roles(member, data):
 # DISCORD EVENTS & COMMANDS
 # ==============================================================================
 
-# ====== Khi bot sẵn sàng ======
 @bot.event
 async def on_ready():
     global db
     retry_count = 0
     max_retries = 10 
-
-    # --- Đảm bảo DB được kết nối trước khi tiếp tục ---
     while db is None and retry_count < max_retries:
         print(f"🔄 Thử kết nối Firestore lần {retry_count + 1}...")
         initialize_firestore() 
@@ -388,11 +340,8 @@ async def on_ready():
             await asyncio.sleep(2 * retry_count) 
         else:
             break 
-
     if db is None:
         print("🛑 Lỗi nghiêm trọng: KHÔNG THỂ kết nối Firestore sau nhiều lần thử.")
-    # -----------------------------------------------------------------------
-
     print(f"✅ Bot Level/Tiền tệ đã đăng nhập thành công: {bot.user}")
     try:
         synced = await bot.tree.sync()
@@ -400,15 +349,9 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Lỗi sync command: {e}")
 
-
-# ====== Lắng nghe tin nhắn để tính XP ======
 @bot.event
 async def on_message(message):
-    if message.author.bot or db is None:
-        await bot.process_commands(message)
-        return
-
-    if not isinstance(message.channel, discord.TextChannel):
+    if message.author.bot or db is None or not isinstance(message.channel, discord.TextChannel):
         await bot.process_commands(message)
         return
 
@@ -418,690 +361,326 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    # Giới hạn XP: chỉ nhận XP sau XP_COOLDOWN_SECONDS giây
-    MIN_XP_COOLDOWN = timedelta(seconds=XP_COOLDOWN_SECONDS)
     last_xp = data.get('last_xp_message', datetime.min)
-
     if not isinstance(last_xp, datetime):
-         # Cần xử lý lại nếu last_xp không phải là datetime (ví dụ: bị lưu thành timestamp)
         last_xp = datetime.min 
 
-    time_since_last_msg = datetime.now() - last_xp
-
-    if time_since_last_msg > MIN_XP_COOLDOWN:
-        xp_gain = random.randint(5, 15)
-        data['xp'] += xp_gain
+    if datetime.now() - last_xp > timedelta(seconds=XP_COOLDOWN_SECONDS):
+        data['xp'] = data.get('xp', 0) + random.randint(5, 15)
         data['last_xp_message'] = datetime.now()
-
-        # Cập nhật Level và Role (hàm này sẽ gọi save_user_data nếu level thay đổi)
+        
+        old_level = data.get('level', 0)
         await update_user_level_and_roles(message.author, data)
 
-        # Nếu không level up, vẫn cần lưu lại XP và last_xp_message
-        current_db_data = await get_user_data(user_id)
-        if current_db_data and data.get('level', 0) == current_db_data.get('level', 0):
-             # Chỉ lưu lại nếu không có thay đổi level (để tránh race condition)
+        if data.get('level', 0) == old_level:
             await save_user_data(user_id, data)
 
     await bot.process_commands(message)
 
-
 # ==============================================================================
-# REACTION ROLE LOGIC (NEW)
+# REACTION ROLE LOGIC
 # ==============================================================================
 
 @bot.tree.command(name="setup_roles_msg", description="[ADMIN ONLY] Thiết lập tin nhắn Reaction Role.")
 @commands.has_permissions(administrator=True)
 async def setup_roles_msg(interaction: discord.Interaction):
-    # Lấy ID của các Role Group chính
-    HERO_ROLE_ID = ROLE_IDS["HERO_GROUP"]
-    MONSTER_ROLE_ID = ROLE_IDS["MONSTER_GROUP"]
-    
-    # Kiểm tra xem các Role đã được định nghĩa chưa
-    if not HERO_ROLE_ID or not MONSTER_ROLE_ID:
-        await interaction.response.send_message(
-            "❌ Lỗi cấu hình: Vui lòng thay thế ID mẫu trong **ROLE_IDS** bằng ID Hero Group và Monster Group thực tế của bạn.",
-            ephemeral=True
-        )
+    if not ROLE_IDS.get("HERO_GROUP") or not ROLE_IDS.get("MONSTER_GROUP"):
+        await interaction.response.send_message("❌ Lỗi cấu hình: Vui lòng thay ID mẫu trong ROLE_IDS.", ephemeral=True)
         return
 
     embed = discord.Embed(
-        title="⚔️ CHỌN PHE CỦA BẠN 👹", 
-        description=(
-            "Vui lòng bấm vào biểu tượng cảm xúc để chọn nhóm vai trò chính:\n\n"
-            "**🦸‍♂️ Hero:** Bấm **⚔️** để nhận Role Hero.\n"
-            "**👾 Monster:** Bấm **👹** để nhận Role Monster.\n\n"
-            "**Cách đổi/hủy:** Bấm lại vào Reaction đang chọn để hủy. Sau đó bấm vào Reaction khác để đổi phe. Việc này sẽ **GIỮ NGUYÊN** Level và XP của bạn."
-        ),
+        title="⚔️ CHỌN PHE CỦA BẠN 👹",
+        description="Bấm vào biểu tượng để chọn nhóm vai trò:\n\n"
+                    "**🦸‍♂️ Hero:** Bấm **⚔️**\n"
+                    "**👾 Monster:** Bấm **👹**\n\n"
+                    "**Cách đổi/hủy:** Bỏ reaction cũ và chọn reaction mới. Việc này sẽ **GIỮ NGUYÊN** Level và XP.",
         color=discord.Color.gold()
     )
-    embed.set_footer(text="Chọn phe sẽ kích hoạt hệ thống Level & Rank của bot.")
-
-    # Gửi tin nhắn và thêm Reactions
-    await interaction.response.send_message("Đang thiết lập tin nhắn...", ephemeral=True)
-    
+    await interaction.response.send_message("Đang thiết lập...", ephemeral=True)
     try:
-        # Gửi tin nhắn vào kênh hiện tại
         message = await interaction.channel.send(embed=embed)
         await message.add_reaction("⚔️")
         await message.add_reaction("👹")
-        
-        # LƯU MESSAGE ID VÀ CHANNEL ID vào Firestore
         await save_reaction_message_id(interaction.guild_id, message.id, interaction.channel_id)
-        
-        await interaction.edit_original_response(
-            content=f"✅ Đã thiết lập tin nhắn Reaction Role thành công! Vui lòng pin (ghim) tin nhắn này."
-        )
-
+        await interaction.edit_original_response(content="✅ Đã thiết lập thành công! Vui lòng ghim tin nhắn này.")
     except Exception as e:
         print(f"Lỗi khi thiết lập Reaction Role: {e}")
-        await interaction.edit_original_response(
-            content="❌ Lỗi: Bot không thể gửi tin nhắn hoặc thêm reactions (kiểm tra quyền)."
-        )
+        await interaction.edit_original_response(content="❌ Lỗi: Bot không thể gửi tin nhắn hoặc thêm reaction.")
 
-# Xử lý khi người dùng BẤM Reaction (Reaction Add)
-@bot.event
-async def on_raw_reaction_add(payload):
-    # Bỏ qua nếu Reaction là của bot hoặc nếu DB chưa sẵn sàng
-    if payload.member is None or payload.member.bot or db is None:
+async def handle_reaction(payload, add: bool):
+    if db is None: return
+    config = await get_reaction_message_ids()
+    guild_config = config.get(str(payload.guild_id))
+    if not guild_config or payload.message_id != int(guild_config['message_id']):
         return
 
-    # Lấy thông tin Message ID của tin nhắn Reaction Role đã lưu
-    config = await get_reaction_message_ids()
-    guild_config = config.get(str(payload.guild_id))
-
-    if not guild_config or payload.message_id != int(guild_config['message_id']):
-        return # Không phải tin nhắn Reaction Role cần xử lý
-
     guild = bot.get_guild(payload.guild_id)
     if not guild: return
-    
-    member = guild.get_member(payload.user_id)
-    if not member: return
-
-    # Ánh xạ Reaction Emoji sang Role Key
-    emoji_name = payload.emoji.name
-    role_key = REACTION_ROLES_CONFIG.get(emoji_name)
-
-    if not role_key:
-        return # Không phải emoji Hero/Monster
-
-    new_role_id = ROLE_IDS.get(role_key)
-    if not new_role_id: return
-
-    new_role = guild.get_role(new_role_id)
-    if not new_role: return
-
-    # Lấy data người dùng từ Firestore
-    user_data = await get_user_data(payload.user_id)
-    if user_data is None: return
-
-    # --- LOGIC CHỌN/ĐỔI ROLE ---
-    
-    # 1. Xác định Role Group cũ (nếu có)
-    old_group_name = user_data.get('role_group')
-    new_group_name = 'HERO' if role_key == 'HERO_GROUP' else 'MONSTER'
-    
-    # Nếu người dùng bấm lại vào Role Group đã chọn (hành vi hủy/bỏ qua)
-    if old_group_name == new_group_name:
-        # Giữ nguyên Role hiện tại. Discord sẽ tự động thêm Reaction, 
-        # nhưng chúng ta không cần làm gì thêm ở đây nếu đã có Role.
-        # Logic Hủy sẽ nằm trong on_raw_reaction_remove.
-        
-        # Nếu đã có Role Group này, không cần làm gì
-        # This check might need `intents.guilds` to be reliable.
-        # For now, we assume if they have the group name, they have the role.
-        return 
-    
-    # 2. Xử lý đổi nhóm (Remove Role cũ và Rank cũ)
-    
-    # Lấy ID Role Group cũ
-    old_role_id = ROLE_IDS[f"{old_group_name.upper()}_GROUP"] if old_group_name else None
-    
-    # Nếu có Role Group cũ và nó khác Role Group mới
-    if old_group_name and old_group_name != new_group_name:
-        old_role = guild.get_role(old_role_id)
-        if old_role and old_role in member.roles:
-            await member.remove_roles(old_role, reason="Reaction Role: Đổi nhóm - Gỡ nhóm cũ")
-            
-        # Gỡ TẤT CẢ Role Rank cũ của nhóm đó (ví dụ: gỡ HERO_C, HERO_B...)
-        group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
-        all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                 if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
-        
-        roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove, reason="Reaction Role: Đổi nhóm - Gỡ Rank cũ")
-
-    # 3. Gán Role Group mới
-    if new_role not in member.roles:
-        await member.add_roles(new_role, reason="Reaction Role: Chọn nhóm mới")
-
-    # 4. Cập nhật data trong Firestore
-    user_data['role_group'] = new_group_name
-    
-    # Giữ nguyên level và xp khi đổi nhóm
-    # (Code reset đã được xóa)
-        
-    await save_user_data(payload.user_id, user_data)
-    
-    # Tự động cấp Rank (sẽ cấp Rank tương ứng với level hiện tại)
-    await update_user_level_and_roles(member, user_data)
-
-    # (Tuỳ chọn) Gửi tin nhắn thông báo
-    channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
-    if channel and any(role.id == new_role_id for role in member.roles):
-        try:
-            await channel.send(f"✅ {member.mention} đã chọn nhóm **{new_group_name}**!", delete_after=5)
-        except:
-             pass # Có thể bot không có quyền gửi tin nhắn trong kênh đó
-
-
-# Xử lý khi người dùng BỎ Reaction (Reaction Remove)
-@bot.event
-async def on_raw_reaction_remove(payload):
-    # Bỏ qua nếu DB chưa sẵn sàng
-    if db is None: return
-    
-    # Lấy thông tin Message ID của tin nhắn Reaction Role đã lưu
-    config = await get_reaction_message_ids()
-    guild_config = config.get(str(payload.guild_id))
-
-    if not guild_config or payload.message_id != int(guild_config['message_id']):
-        return # Không phải tin nhắn Reaction Role cần xử lý
-    
-    guild = bot.get_guild(payload.guild_id)
-    if not guild: return
-
-    # Lấy member (cần thiết vì payload.member không tồn tại trong remove)
     member = guild.get_member(payload.user_id)
     if not member or member.bot: return
 
-    # Ánh xạ Reaction Emoji sang Role Key
-    emoji_name = payload.emoji.name
-    role_key = REACTION_ROLES_CONFIG.get(emoji_name)
-
+    role_key = REACTION_ROLES_CONFIG.get(payload.emoji.name)
     if not role_key: return
 
-    role_id_to_remove = ROLE_IDS.get(role_key)
-    if not role_id_to_remove: return
+    role_id = ROLE_IDS.get(role_key)
+    role = guild.get_role(role_id) if role_id else None
+    if not role: return
 
-    role_to_remove = guild.get_role(role_id_to_remove)
-    if not role_to_remove: return
+    user_data = await get_user_data(payload.user_id)
+    if user_data is None: return
 
-    # --- LOGIC HỦY ROLE ---
-    
-    # Nếu người dùng bỏ Reaction, ta HỦY Role Group và gỡ Rank tương ứng
-    if role_to_remove in member.roles:
-        
-        # 1. Gỡ Role Group
-        await member.remove_roles(role_to_remove, reason="Reaction Role: Hủy chọn nhóm")
-        
-        # 2. Gỡ TẤT CẢ Role Rank cũ của nhóm đó
-        group_name = 'HERO' if role_key == 'HERO_GROUP' else 'MONSTER'
-        group_prefix = 'HERO' if group_name == 'HERO' else 'M_' 
-        
-        all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                 if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
-        
-        roles_to_remove_rank = [r for r in member.roles if r.id in all_rank_roles_ids]
-        if roles_to_remove_rank:
-            await member.remove_roles(*roles_to_remove_rank, reason="Reaction Role: Hủy nhóm - Gỡ Rank")
+    if add:
+        old_group_name = user_data.get('role_group')
+        new_group_name = 'HERO' if role_key == 'HERO_GROUP' else 'MONSTER'
+        if old_group_name == new_group_name: return
 
-        # 3. Cập nhật data: chỉ reset role_group, GIỮ NGUYÊN level và xp
-        user_data = await get_user_data(payload.user_id)
-        if user_data:
+        if old_group_name:
+            old_role_id = ROLE_IDS.get(f"{old_group_name.upper()}_GROUP")
+            old_role = guild.get_role(old_role_id) if old_role_id else None
+            if old_role in member.roles: await member.remove_roles(old_role)
+            group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_'
+            all_rank_roles_ids = [v for k, v in ROLE_IDS.items() if k.startswith(group_prefix) and 'GROUP' not in k]
+            roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
+            if roles_to_remove: await member.remove_roles(*roles_to_remove)
+
+        if role not in member.roles: await member.add_roles(role)
+        user_data['role_group'] = new_group_name
+        await save_user_data(payload.user_id, user_data)
+        await update_user_level_and_roles(member, user_data)
+    else: # Remove reaction
+        if role in member.roles:
+            await member.remove_roles(role)
+            group_prefix = 'HERO' if role_key == 'HERO_GROUP' else 'M_'
+            all_rank_roles_ids = [v for k, v in ROLE_IDS.items() if k.startswith(group_prefix) and 'GROUP' not in k]
+            roles_to_remove_rank = [r for r in member.roles if r.id in all_rank_roles_ids]
+            if roles_to_remove_rank: await member.remove_roles(*roles_to_remove_rank)
+            
             user_data['role_group'] = None
-            # === FIX: ĐÃ XÓA CÁC DÒNG RESET LEVEL VÀ XP ===
-            # user_data['level'] = 0
-            # user_data['xp'] = 0
             await save_user_data(payload.user_id, user_data)
 
+@bot.event
+async def on_raw_reaction_add(payload):
+    await handle_reaction(payload, add=True)
 
-# ====== Lệnh /buff_xp (CHỈ DÀNH CHO GUILD OWNER) ======
-@bot.tree.command(name="buff_xp", description="[OWNER ONLY] Thêm XP cho người dùng để kiểm tra hệ thống.")
-@app_commands.default_permissions(administrator=True)
-@app_commands.describe(member="Người dùng muốn buff XP", amount="Số lượng XP muốn thêm")
-@commands.is_owner() 
-async def buff_xp(interaction: discord.Interaction, member: discord.Member, amount: int):
-    # Kiểm tra Guild Owner (chủ server)
-    if interaction.guild.owner_id != interaction.user.id:
-        await interaction.response.send_message(
-            "❌ Lệnh này chỉ dành cho Chủ Server (Guild Owner).", ephemeral=True
-        )
-        return
+@bot.event
+async def on_raw_reaction_remove(payload):
+    await handle_reaction(payload, add=False)
 
-    if amount <= 0:
-        await interaction.response.send_message("❌ Số lượng XP phải lớn hơn 0.", ephemeral=True)
-        return
+# ==============================================================================
+# SLASH COMMANDS
+# ==============================================================================
 
-    data = await get_user_data(member.id)
-
-    if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
-        return
-    
-    if data['role_group'] is None:
-        await interaction.response.send_message("❌ Người dùng chưa chọn Role Group (Hero/Monster). Vui lòng dùng lệnh `/select` hoặc Reaction Role.", ephemeral=True)
-        return
-
-
-    old_level = data['level']
-    data['xp'] += amount
-
-    # Cập nhật Level và Role
-    await update_user_level_and_roles(member, data)
-
-    # Lưu lại data sau khi buff
-    await save_user_data(member.id, data)
-
-    new_level = data['level']
-
-    response_msg = f"✅ Đã thêm **{amount} XP** cho {member.mention}.\n"
-    response_msg += f"XP hiện tại: **{data['xp']}** (Level **{new_level}**).\n"
-
-    if new_level > old_level:
-        response_msg += f"**🎉 Thăng cấp từ Level {old_level} lên Level {new_level}!**"
-
-    await interaction.response.send_message(response_msg)
-
-
-# ====== Lệnh /profile (Hiển thị thông tin người dùng) ======
 @bot.tree.command(name="profile", description="Xem Level, XP và số tiền của bạn")
 async def profile(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    data = await get_user_data(user_id)
-
+    data = await get_user_data(interaction.user.id)
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi cơ sở dữ liệu.", ephemeral=True)
         return
 
-    required_xp = get_required_xp(data['level'])
-
-    # Xác định Rank hiện tại và tên
+    required_xp = get_required_xp(data.get('level', 0))
     rank_role_id = get_current_rank_role(data)
     rank_role = interaction.guild.get_role(rank_role_id) if rank_role_id else None
-    rank_name = rank_role.name if rank_role else "Chưa xếp hạng"
-    group_name = data.get('role_group', 'Chưa chọn nhóm')
-
-    embed = discord.Embed(title=f"👤 Thông tin Hồ sơ của {interaction.user.display_name}", color=discord.Color.blue())
-    embed.add_field(name="📜 Nhóm Role", value=group_name, inline=False)
-    embed.add_field(name="⭐ Cấp Độ (Level)", value=f"**{data['level']}**", inline=True)
-    embed.add_field(name="🏆 Rank/Hạng", value=rank_name, inline=True)
-    embed.add_field(name="📈 XP", value=f"**{data['xp']}** / {required_xp} XP", inline=False)
-    embed.add_field(name="💰 Fund", value=f"**{data['fund']}** {ROLE_IDS['FUND_EMOJI']}", inline=True)
-    embed.add_field(name="🎟️ Coupon", value=f"**{data['coupon']}** {ROLE_IDS['COUPON_EMOJI']}", inline=True)
-
+    
+    embed = discord.Embed(title=f"👤 Hồ sơ của {interaction.user.display_name}", color=discord.Color.blue())
+    embed.add_field(name="📜 Nhóm", value=data.get('role_group', 'Chưa chọn'), inline=False)
+    embed.add_field(name="⭐ Level", value=f"**{data.get('level', 0)}**", inline=True)
+    embed.add_field(name="🏆 Rank", value=rank_role.name if rank_role else "Chưa có", inline=True)
+    embed.add_field(name="📈 XP", value=f"**{data.get('xp', 0)}** / {required_xp}", inline=False)
+    embed.add_field(name="💰 Fund", value=f"**{data.get('fund', 0)}** {ROLE_IDS['FUND_EMOJI']}", inline=True)
+    embed.add_field(name="🎟️ Coupon", value=f"**{data.get('coupon', 0)}** {ROLE_IDS['COUPON_EMOJI']}", inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-# ====== Lệnh /daily (Điểm danh nhận tiền) ======
-@bot.tree.command(name="daily", description="Điểm danh mỗi ngày để nhận Fund và Coupon (Reset 0:00)")
+@bot.tree.command(name="daily", description="Điểm danh mỗi ngày để nhận thưởng (Reset 0:00)")
 async def daily(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    data = await get_user_data(user_id)
-
+    data = await get_user_data(interaction.user.id)
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
+        await interaction.response.send_message("❌ Lỗi cơ sở dữ liệu.", ephemeral=True)
         return
 
-    now = datetime.now()
     last_daily = data.get('last_daily')
-    now_date = now.date()
-
-    # Logic reset vào 0:00 (nửa đêm)
-    if last_daily and last_daily.date() == now_date:
-        # Đã điểm danh hôm nay, tính thời gian còn lại đến 0:00 ngày mai
-        next_reset = datetime(now_date.year, now_date.month, now_date.day) + timedelta(days=1)
-        remaining_time = next_reset - now
-        
-        hours, remainder = divmod(int(remaining_time.total_seconds()), 3600)
-        minutes, seconds = divmod(remainder, 60)
-
-        await interaction.response.send_message(
-            f"⏳ Bạn đã điểm danh hôm nay rồi! Lượt điểm danh mới sẽ có lúc **0:00** (nửa đêm) hằng ngày. Vui lòng chờ **{hours} giờ {minutes} phút** nữa.",
-            ephemeral=True
-        )
+    if last_daily and last_daily.date() == datetime.now().date():
+        await interaction.response.send_message("⏳ Bạn đã điểm danh hôm nay rồi!", ephemeral=True)
         return
 
-    # Tính thưởng
     fund_reward = random.randint(100, 300)
     coupon_reward = random.randint(50, 150)
-
-    data['fund'] += fund_reward
-    data['coupon'] += coupon_reward
-    data['last_daily'] = now
-
-    await save_user_data(user_id, data) # LƯU VÀO FIRESTORE
-
+    data['fund'] = data.get('fund', 0) + fund_reward
+    data['coupon'] = data.get('coupon', 0) + coupon_reward
+    data['last_daily'] = datetime.now()
+    await save_user_data(interaction.user.id, data)
     await interaction.response.send_message(
-        f"✅ Chúc mừng! Bạn đã điểm danh thành công và nhận được:\n"
-        f"**+{fund_reward}** {ROLE_IDS['FUND_EMOJI']} Fund\n"
-        f"**+{coupon_reward}** {ROLE_IDS['COUPON_EMOJI']} Coupon",
+        f"✅ Điểm danh thành công! Nhận được:\n"
+        f"**+{fund_reward}** {ROLE_IDS['FUND_EMOJI']} & **+{coupon_reward}** {ROLE_IDS['COUPON_EMOJI']}",
         ephemeral=True
     )
 
-# ====== Lệnh /exchange (Quy đổi tiền tệ) ======
-@bot.tree.command(name="exchange", description="Trao đổi tiền tệ: Fund 🔄 Coupon (Tỷ giá 1:1).")
-@app_commands.describe(
-    exchange_type="Chọn loại tiền bạn muốn ĐỔI.",
-    amount="Số lượng tiền muốn trao đổi (tối thiểu 100)."
-)
-@app_commands.choices(
-    exchange_type=[
-        app_commands.Choice(name="💰 Fund -> Coupon", value="fund_to_coupon"),
-        app_commands.Choice(name="🎟️ Coupon -> Fund", value="coupon_to_fund"),
-    ]
-)
+@bot.tree.command(name="exchange", description="Trao đổi tiền tệ Fund 🔄 Coupon (Tỷ giá 1:1).")
+@app_commands.describe(exchange_type="Loại tiền bạn muốn ĐỔI.", amount="Số lượng (tối thiểu 100).")
+@app_commands.choices(exchange_type=[
+    app_commands.Choice(name="💰 Fund -> Coupon", value="fund_to_coupon"),
+    app_commands.Choice(name="🎟️ Coupon -> Fund", value="coupon_to_fund"),
+])
 async def exchange(interaction: discord.Interaction, exchange_type: app_commands.Choice[str], amount: int):
     await interaction.response.defer(ephemeral=True)
-    user_id = interaction.user.id
-    data = await get_user_data(user_id)
-    
-    MIN_AMOUNT = 100 # Đặt giới hạn trao đổi tối thiểu
-
+    data = await get_user_data(interaction.user.id)
     if data is None:
-        return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        return await interaction.followup.send("❌ Lỗi cơ sở dữ liệu.", ephemeral=True)
+    if amount < 100:
+        return await interaction.followup.send("❌ Số tiền trao đổi tối thiểu là 100.", ephemeral=True)
+
+    source, target = ('fund', 'coupon') if exchange_type.value == "fund_to_coupon" else ('coupon', 'fund')
+    if data.get(source, 0) < amount:
+        return await interaction.followup.send(f"❌ Bạn không đủ {source.capitalize()}.", ephemeral=True)
     
-    if amount < MIN_AMOUNT:
-        return await interaction.followup.send(f"❌ Số tiền trao đổi tối thiểu phải là **{MIN_AMOUNT:,}**.", ephemeral=True)
+    data[source] -= amount
+    data[target] = data.get(target, 0) + amount
+    await save_user_data(interaction.user.id, data)
+    await interaction.followup.send(f"✅ Đã đổi **{amount:,}** {source.capitalize()} sang {target.capitalize()}.", ephemeral=True)
 
-    if exchange_type.value == "fund_to_coupon":
-        source_key, target_key = 'fund', 'coupon'
-        source_emoji, target_emoji = ROLE_IDS.get('FUND_EMOJI', '💰'), ROLE_IDS.get('COUPON_EMOJI', '🎟️')
-        source_name, target_name = "Fund", "Coupon"
-    else:
-        source_key, target_key = 'coupon', 'fund'
-        source_emoji, target_emoji = ROLE_IDS.get('COUPON_EMOJI', '🎟️'), ROLE_IDS.get('FUND_EMOJI', '💰')
-        source_name, target_name = "Coupon", "Fund"
-
-    source_balance = data.get(source_key, 0)
-    
-    if source_balance < amount:
-        return await interaction.followup.send(
-            f"❌ Bạn không đủ {source_name}. Bạn chỉ có **{source_balance:,}** {source_emoji}.",
-            ephemeral=True
-        )
-
-    # Thực hiện trao đổi 1:1
-    data[source_key] = source_balance - amount
-    data[target_key] = data.get(target_key, 0) + amount
-
-    await save_user_data(user_id, data) # LƯU VÀO FIRESTORE
-
-    await interaction.followup.send(
-        f"✅ Quy đổi thành công!\n"
-        f"Đã trừ **{amount:,}** {source_emoji} {source_name}.\n"
-        f"Đã thêm **{amount:,}** {target_emoji} {target_name}.\n"
-        f"Số dư {source_name} mới: **{data[source_key]:,}**. Số dư {target_name} mới: **{data[target_key]:,}**.",
-        ephemeral=True
-    )
-
-# ====== Lệnh /select (Vẫn giữ lại cho người thích dùng lệnh) ======
-@bot.tree.command(name="select", description="Chọn nhóm vai trò chính: Hero hoặc Monster")
-async def select_group(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    data = await get_user_data(user_id)
-
-    if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
-        return
-
-    class RoleGroupSelect(discord.ui.View):
-        def __init__(self, data):
-            super().__init__(timeout=600)
-            self.data = data
-            self.current_group = data.get('role_group')
-
-        async def _update_roles(self, i: discord.Interaction, new_group_name):
-            member = i.user
-            guild = i.guild
-
-            new_group_key = f"{new_group_name.upper()}_GROUP"
-            new_role_id = ROLE_IDS[new_group_key]
-            new_role = guild.get_role(new_role_id)
-
-            old_group_name = self.current_group
-            old_role_id = ROLE_IDS[f"{old_group_name.upper()}_GROUP"] if old_group_name else None
-            old_role = guild.get_role(old_role_id) if old_role_id else None
-
-            msg = ""
-
-            # Xử lý Hủy chọn (Toggle off)
-            if old_group_name and old_group_name.lower() == new_group_name.lower():
-                self.data['role_group'] = None
-                self.data['level'] = 0 # Giữ nguyên hoặc reset tùy bạn
-                self.data['xp'] = 0 # Giữ nguyên hoặc reset tùy bạn
-                if new_role:
-                    await member.remove_roles(new_role, reason="Hủy chọn Role Group")
-                msg = f"Đã **HỦY** chọn nhóm **{new_group_name.upper()}**. Level và XP đã được reset."
-
-                # Gỡ tất cả role rank cũ
-                group_prefix = 'HERO' if old_group_name == 'HERO' else 'M_' 
-                all_rank_roles_ids = [id for key, id in ROLE_IDS.items()
-                                         if key.startswith(group_prefix) and key not in ('HERO_GROUP', 'MONSTER_GROUP')]
-                
-                roles_to_remove = [r for r in member.roles if r.id in all_rank_roles_ids]
-                if roles_to_remove:
-                    await member.remove_roles(*roles_to_remove, reason="Hủy Role Group: Gỡ Rank")
-
-            # Xử lý Chọn mới/Đổi nhóm
-            else:
-                self.data['role_group'] = new_group_name.upper()
-
-                if old_role and old_role in member.roles:
-                    await member.remove_roles(old_role, reason="Chuyển Role Group: Gỡ nhóm cũ")
-                    msg += f"Đã gỡ nhóm **{old_group_name.upper()}**.\n"
-
-                if new_role and new_role not in member.roles:
-                    await member.add_roles(new_role, reason="Chọn Role Group mới")
-
-                msg += f"✅ Bạn đã chọn nhóm **{new_group_name.upper()}**."
-
-                # Giữ nguyên Level/XP nếu đổi nhóm
-                if old_group_name and old_group_name != new_group_name:
-                    pass
-          
-                # Tự động cấp Rank mới sau khi chọn nhóm
-                await update_user_level_and_roles(member, self.data)
-
-            self.current_group = self.data['role_group']
-            await save_user_data(i.user.id, self.data) # LƯU VÀO FIRESTORE
-            await i.response.edit_message(content=msg, view=self)
-
-        @discord.ui.button(label="Hero", style=discord.ButtonStyle.primary, emoji="🦸‍♂️")
-        async def hero_button(self, i: discord.Interaction, button: discord.ui.Button):
-            await self._update_roles(i, "hero")
-
-        @discord.ui.button(label="Monster", style=discord.ButtonStyle.danger, emoji="👹")
-        async def monster_button(self, i: discord.Interaction, button: discord.ui.Button):
-            await self._update_roles(i, "monster")
-
-    await interaction.response.send_message(
-        "Vui lòng chọn nhóm vai trò chính của bạn:",
-        view=RoleGroupSelect(data),
-        ephemeral=True
-    )
 
 # ====== Lệnh /all_in (Cược 80% số tiền) ======
-# Định nghĩa các lựa chọn cho lệnh
 CURRENCY_CHOICES = [
     app_commands.Choice(name="Fund", value="fund"),
     app_commands.Choice(name="Coupon", value="coupon"),
 ]
-
 @bot.tree.command(name="all_in", description="Cược 80% Fund hoặc Coupon bạn đang có (Thắng x2, Thua mất hết)")
 @app_commands.describe(currency="Loại tiền tệ bạn muốn cược")
 @app_commands.choices(currency=CURRENCY_CHOICES)
 async def all_in(interaction: discord.Interaction, currency: app_commands.Choice[str]):
+    await interaction.response.defer() 
+
     user_id = interaction.user.id
     data = await get_user_data(user_id)
 
     if data is None:
-        await interaction.response.send_message("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng. Vui lòng thử lại sau vài giây.", ephemeral=True)
+        await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
         return
     
-    currency_key = currency.value # 'fund' hoặc 'coupon'
-    currency_name = currency.name # 'Fund' hoặc 'Coupon'
-    currency_emoji = ROLE_IDS[f"{currency_key.upper()}_EMOJI"]
+    currency_key = currency.value 
+    currency_name = currency.name 
+    currency_emoji = ROLE_IDS[f"{currency_name.upper()}_EMOJI"]
     
     current_balance = data.get(currency_key, 0)
-
-    # Tính số tiền cược (80% tổng số tiền, làm tròn xuống)
     bet_amount = int(current_balance * 0.8)
 
     if bet_amount <= 0:
-        await interaction.response.send_message(
-            f"❌ Bạn cần ít nhất 1 {currency_name} để cược 80% (cần > 1.25 {currency_name}).",
+        await interaction.followup.send(
+            f"❌ Bạn không có đủ {currency_name} để cược.",
             ephemeral=True
         )
         return
     
-    # --- LOGIC CƯỢC ---
-    win = random.choice([True, False]) # 50% thắng, 50% thua
+    # --- LOGIC CƯỢC VÀ HIỆU ỨNG 777 ---
+    slots = ["💎", "🍒", "🔔", "🍊", "🍋", "🍇", "🎁"]
+    win = random.choice([True, False])
     
+    embed = discord.Embed(
+        title=f"🎲 ALL IN - Cược {currency_name}",
+        description=f"{interaction.user.mention} cược **{bet_amount:,}** {currency_emoji}...",
+        color=discord.Color.gold()
+    )
+    s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
+    embed.add_field(name="Kết quả", value=f"**>** ` {s1} | {s2} | {s3} ` **<**")
+    
+    await interaction.followup.send(embed=embed)
+    message = await interaction.original_response()
+
+    for _ in range(3):
+        await asyncio.sleep(0.75)
+        s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
+        embed.set_field_at(0, name="Kết quả", value=f"**>** ` {s1} | {s2} | {s3} ` **<**")
+        await message.edit(embed=embed)
+    
+    await asyncio.sleep(1)
+
+    if win:
+        final_slots = f"**>** ` 7️⃣ | 7️⃣ | 7️⃣ ` **<**"
+    else:
+        s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
+        while s1 == s2 == s3:
+            s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
+        final_slots = f"**>** ` {s1} | {s2} | {s3} ` **<**"
+    
+    embed.set_field_at(0, name="Kết quả", value=final_slots)
+    await message.edit(embed=embed)
+    await asyncio.sleep(1.5)
+
     old_balance = current_balance
-    new_balance = 0
-    gain_or_loss = 0
     
     if win:
-        # Thắng: nhận lại số cược + tiền thắng (tổng cộng +bet_amount)
         data[currency_key] += bet_amount 
         gain_or_loss = bet_amount
-        result_text = f"🎉 **THẮNG CUỘC!** Bạn đã nhân đôi số tiền cược **{bet_amount:,}** {currency_emoji} {currency_name}."
+        result_text = f"🎉 **THẮNG LỚN!** Bạn đã nhân đôi số tiền cược!"
+        embed.color = discord.Color.green()
     else:
-        # Thua: mất số tiền cược (-bet_amount)
         data[currency_key] -= bet_amount
         gain_or_loss = -bet_amount
-        result_text = f"💀 **THUA CƯỢC!** Bạn đã mất số tiền cược **{bet_amount:,}** {currency_emoji} {currency_name}."
+        result_text = f"💀 **THUA CƯỢC!** Chúc bạn may mắn lần sau."
+        embed.color = discord.Color.red()
 
-    new_balance = data[currency_key]
+    await save_user_data(user_id, data)
 
-    await save_user_data(user_id, data) # LƯU VÀO FIRESTORE
-
-    embed = discord.Embed(
-        title=f"🎲 ALL IN - Cược {currency_name}", 
-        description=result_text, 
-        color=discord.Color.green() if win else discord.Color.red()
-    )
-    
+    embed.description = result_text
+    embed.clear_fields()
     embed.add_field(name="Loại tiền cược", value=f"{currency_emoji} {currency_name}", inline=True)
     embed.add_field(name="Số tiền cược", value=f"**{bet_amount:,}**", inline=True)
     embed.add_field(name="Lãi/Lỗ", value=f"**{'+' if gain_or_loss >= 0 else ''}{gain_or_loss:,}**", inline=True)
     embed.add_field(name="Số dư cũ", value=f"{old_balance:,}", inline=True)
-    embed.add_field(name="Số dư mới", value=f"**{new_balance:,}**", inline=True)
-    
-    await interaction.response.send_message(embed=embed)
+    embed.add_field(name="Số dư mới", value=f"**{data[currency_key]:,}**", inline=True)
+    await message.edit(embed=embed)
 
-# ====== Lệnh /transfer (Chuyển tiền tệ cho người khác) ======
 @bot.tree.command(name="transfer", description="Chuyển Fund/Coupon cho người chơi khác.")
 @app_commands.describe(
-    recipient="Người chơi bạn muốn chuyển tiền cho.",
-    currency_type="Chọn loại tiền muốn chuyển.",
-    amount="Số lượng muốn chuyển (tối thiểu 100)."
+    recipient="Người muốn chuyển tiền cho.",
+    currency_type="Loại tiền muốn chuyển.",
+    amount="Số lượng (tối thiểu 100)."
 )
-@app_commands.choices(
-    currency_type=[
-        app_commands.Choice(name="💰 Fund", value="fund"),
-        app_commands.Choice(name="🎟️ Coupon", value="coupon"),
-    ]
-)
+@app_commands.choices(currency_type=[
+    app_commands.Choice(name="💰 Fund", value="fund"),
+    app_commands.Choice(name="🎟️ Coupon", value="coupon"),
+])
 async def transfer_command(interaction: discord.Interaction, recipient: discord.Member, currency_type: app_commands.Choice[str], amount: int):
     await interaction.response.defer(ephemeral=True)
-    
-    sender_id = str(interaction.user.id)
-    recipient_id = str(recipient.id)
-    MIN_TRANSFER = 100
-    
     if interaction.user.id == recipient.id:
-        return await interaction.followup.send("❌ Bạn không thể chuyển tiền cho chính mình.", ephemeral=True)
-    
-    if amount < MIN_TRANSFER:
-        return await interaction.followup.send(f"❌ Số tiền chuyển tối thiểu là **{MIN_TRANSFER:,}**.", ephemeral=True)
+        return await interaction.followup.send("❌ Bạn không thể tự chuyển cho mình.", ephemeral=True)
+    if amount < 100:
+        return await interaction.followup.send("❌ Số tiền chuyển tối thiểu là 100.", ephemeral=True)
 
-    # Định nghĩa khóa và emoji
-    currency_key = f"current_{currency_type.value}"
-    currency_name = currency_type.name
-    currency_emoji = ROLE_IDS.get(f"{currency_type.value.upper()}_EMOJI", '❓')
+    sender_data = await get_user_data(interaction.user.id)
+    currency_key = currency_type.value
+    if sender_data.get(currency_key, 0) < amount:
+        return await interaction.followup.send(f"❌ Bạn không đủ {currency_key.capitalize()}.", ephemeral=True)
 
-    # Lấy dữ liệu người gửi
-    sender_data = await get_user_data(sender_id)
-    sender_balance = sender_data.get(currency_key, 0)
-
-    # 1. Kiểm tra số dư người gửi
-    if sender_balance < amount:
-        return await interaction.followup.send(f"❌ Số dư {currency_name} của bạn không đủ ({sender_balance:,}{currency_emoji}) để chuyển **{amount:,}**.", ephemeral=True)
-
-    # 2. Xử lý chuyển tiền
-    recipient_data = await get_user_data(recipient_id)
-
-    # Cập nhật người gửi
-    sender_data[currency_key] = sender_balance - amount
-    await save_user_data(sender_id, sender_data)
-
-    # Cập nhật người nhận
+    recipient_data = await get_user_data(recipient.id)
+    sender_data[currency_key] -= amount
     recipient_data[currency_key] = recipient_data.get(currency_key, 0) + amount
-    await save_user_data(recipient_id, recipient_data)
+    await save_user_data(interaction.user.id, sender_data)
+    await save_user_data(recipient.id, recipient_data)
 
-    # 3. Phản hồi
-    embed = discord.Embed(
-        title=f"💸 Chuyển {currency_name} Thành Công",
-        description=f"Bạn đã chuyển **{amount:,}** {currency_emoji} {currency_name} cho {recipient.mention}.",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="Người nhận", value=recipient.display_name, inline=True)
-    embed.add_field(name="Số dư mới của bạn", value=f"{sender_data[currency_key]:,} {currency_emoji}", inline=True)
-    
-    await interaction.followup.send(embed=embed)
-    # ====== Lệnh /buff (Owner Only: Thêm tiền tệ) ======
+    await interaction.followup.send(f"✅ Đã chuyển **{amount:,}** {currency_key.capitalize()} cho {recipient.mention}.", ephemeral=True)
+
+
 @bot.tree.command(name="buff", description="[OWNER ONLY] Thêm Fund/Coupon cho người chơi.")
-@app_commands.default_permissions(administrator=True)
+@commands.is_owner()
 @app_commands.describe(
     target_member="Người chơi cần buff.",
-    currency_type="Chọn loại tiền muốn thêm (Fund hoặc Coupon).",
+    currency_type="Loại tiền muốn thêm.",
     amount="Số lượng muốn thêm."
 )
-@app_commands.choices(
-    currency_type=[
-        app_commands.Choice(name="💰 Fund", value="fund"),
-        app_commands.Choice(name="🎟️ Coupon", value="coupon"),
-    ]
-)
-@commands.is_owner() # Yêu cầu người dùng là Owner của Bot
+@app_commands.choices(currency_type=[
+    app_commands.Choice(name="💰 Fund", value="fund"),
+    app_commands.Choice(name="🎟️ Coupon", value="coupon"),
+])
 async def buff_command(interaction: discord.Interaction, target_member: discord.Member, currency_type: app_commands.Choice[str], amount: int):
     await interaction.response.defer(ephemeral=True)
-    
     if amount <= 0:
-        return await interaction.followup.send("❌ Số tiền thêm phải lớn hơn 0.", ephemeral=True)
+        return await interaction.followup.send("❌ Số tiền phải lớn hơn 0.", ephemeral=True)
 
-    target_id = str(target_member.id)
-    currency_key = f"current_{currency_type.value}"
-    currency_name = currency_type.name
-    currency_emoji = ROLE_IDS.get(f"{currency_type.value.upper()}_EMOJI", '❓')
-
-    # Lấy và cập nhật dữ liệu
-    data = await get_user_data(target_id)
+    data = await get_user_data(target_member.id)
+    currency_key = currency_type.value
     data[currency_key] = data.get(currency_key, 0) + amount
-    await save_user_data(target_id, data)
-
-    # 1. Gửi thông báo cho Admin
-    admin_embed = discord.Embed(
-        title=f"✅ BUFF {currency_name} Thành Công",
-        description=f"Đã thêm **{amount:,}** {currency_emoji} {currency_name} cho {target_member.mention}.",
-        color=discord.Color.green()
-    )
-    admin_embed.add_field(name="Số dư mới", value=f"{data[currency_key]:,} {currency_emoji}")
-    await interaction.followup.send(embed=admin_embed)
-    
-    # 2. Gửi thông báo riêng cho người chơi (Optional)
-    try:
-        target_embed = discord.Embed(
-            title="🎁 Nhận Quà Buff!",
-            description=f"Bạn vừa nhận được **{amount:,}** {currency_emoji} {currency_name} từ Owner.",
-            color=discord.Color.gold()
-        )
-        await target_member.send(embed=target_embed)
-    except discord.errors.Forbidden:
-        pass # Không thể gửi DM
+    await save_user_data(target_member.id, data)
+    await interaction.followup.send(f"✅ Đã thêm **{amount:,}** {currency_key.capitalize()} cho {target_member.mention}.", ephemeral=True)
 
 @buff_command.error
 async def buff_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1109,9 +688,11 @@ async def buff_command_error(interaction: discord.Interaction, error: app_comman
         await interaction.response.send_message("⛔ Lệnh này chỉ dành cho Owner của Bot.", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Đã xảy ra lỗi: {error}", ephemeral=True)
+
 # ====== Chạy bot ======
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     print("⚠️ Chưa có biến môi trường DISCORD_TOKEN!")
 else:
     bot.run(TOKEN)
+
