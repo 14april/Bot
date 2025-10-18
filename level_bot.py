@@ -580,7 +580,8 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
         color=discord.Color.gold()
     )
     s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
-    embed.add_field(name="Kết quả", value=f"**>** ` {s1} | {s2} | {s3} ` **<**")
+    # Gỡ bỏ code block (`) để emoji custom hiển thị tốt hơn
+    embed.add_field(name="Kết quả", value=f"**> {s1} | {s2} | {s3} <**")
     
     await interaction.followup.send(embed=embed)
     message = await interaction.original_response()
@@ -588,18 +589,20 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
     for _ in range(3):
         await asyncio.sleep(0.75)
         s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
-        embed.set_field_at(0, name="Kết quả", value=f"**>** ` {s1} | {s2} | {s3} ` **<**")
+        embed.set_field_at(0, name="Kết quả", value=f"**> {s1} | {s2} | {s3} <**")
         await message.edit(embed=embed)
     
     await asyncio.sleep(1)
 
     if win:
-        final_slots = f"**>** ` 7️⃣ | 7️⃣ | 7️⃣ ` **<**"
+        # Sử dụng emoji của loại tiền tệ đã cược để hiển thị chiến thắng
+        win_emoji = currency_emoji
+        final_slots = f"**> {win_emoji} | {win_emoji} | {win_emoji} <**"
     else:
         s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
         while s1 == s2 == s3:
             s1, s2, s3 = random.choice(slots), random.choice(slots), random.choice(slots)
-        final_slots = f"**>** ` {s1} | {s2} | {s3} ` **<**"
+        final_slots = f"**> {s1} | {s2} | {s3} <**"
     
     embed.set_field_at(0, name="Kết quả", value=final_slots)
     await message.edit(embed=embed)
