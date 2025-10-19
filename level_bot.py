@@ -22,7 +22,7 @@ from firebase_admin import credentials, firestore
 
 # ID SERVER CỦA BẠN (BẮT BUỘC ĐỂ SYNC LỆNH / NHANH HƠN)
 # Hướng dẫn: Bật Developer Mode trong Discord, chuột phải vào server của bạn, chọn "Copy Server ID"
-GUILD_ID = 123456789012345678 # <<<<<<<<<<<< THAY THẾ BẰNG ID SERVER CỦA BẠN
+GUILD_ID = 1378364111653703690 # <<<<<<<<<<<< THAY SỐ NÀY BẰNG ID BẠN VỪA SAO CHÉP
 
 # COLLECTION_NAME là nơi lưu trữ data người dùng trong Firestore
 COLLECTION_NAME = 'discord_bot_users'
@@ -855,3 +855,4 @@ if not TOKEN:
     print("⚠️ Chưa có biến môi trường DISCORD_TOKEN!")
 else:
     bot.run(TOKEN)
+
