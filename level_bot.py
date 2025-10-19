@@ -275,6 +275,27 @@ def get_current_rank_role(data):
 
     return ROLE_IDS.get(current_rank_key) if current_rank_key else None
 
+def get_user_rank_key(data):
+    """Xác định KEY của Role Rank dựa trên Level và Group."""
+    group = data.get('role_group')
+    level = data.get('level', 0)
+
+    if not group or level == 0:
+        return None
+
+    tiers = LEVEL_TIERS.get(group)
+    if not tiers:
+        return None
+
+    current_rank_key = None
+    sorted_levels = sorted(tiers.keys())
+    for lvl in sorted_levels:
+        if level >= lvl:
+            current_rank_key = tiers[lvl]
+        else:
+            break
+
+    return current_rank_key
 
 async def update_user_level_and_roles(member, data):
     """Kiểm tra và cập nhật Level, sau đó áp dụng Role Rank mới, và THÊM THƯỞNG ngẫu nhiên."""
@@ -288,16 +309,18 @@ async def update_user_level_and_roles(member, data):
         new_level += 1
         level_up_occurred = True
         
-        reward_fund = random.randint(50, 150)
-        reward_coupon = random.randint(10, 30)
+        # [MODIFIED] Tăng phần thưởng lên cấp
+        reward_fund = random.randint(10_000_000_000, 999_000_000_000)
+        reward_coupon = random.randint(10_000_000_000, 999_000_000_000)
         
         data['fund'] = data.get('fund', 0) + reward_fund
         data['coupon'] = data.get('coupon', 0) + reward_coupon
         
         try:
+            # [MODIFIED] Thêm định dạng cho số lớn
             await member.send(
                 f"🎉 Chúc mừng {member.mention}! Bạn đã thăng cấp lên **Level {new_level}**!\n"
-                f"🎁 Thưởng Level Up: **+{reward_fund}** {ROLE_IDS['FUND_EMOJI']} Fund và **+{reward_coupon}** {ROLE_IDS['COUPON_EMOJI']} Coupon!"
+                f"🎁 Thưởng Level Up: **+{reward_fund:,}** {ROLE_IDS['FUND_EMOJI']} Fund và **+{reward_coupon:,}** {ROLE_IDS['COUPON_EMOJI']} Coupon!"
             )
         except discord.Forbidden:
             pass
@@ -490,6 +513,118 @@ async def on_raw_reaction_remove(payload):
 # SLASH COMMANDS
 # ==============================================================================
 
+# [NEW] Lệnh /leaderboard
+leaderboard_group = app_commands.Group(name="leaderboard", description="Xem bảng xếp hạng theo XP")
+
+@leaderboard_group.command(name="hero", description="Bảng xếp hạng các Hero theo Rank")
+@app_commands.describe(rank="Chọn rank Hero để xem")
+@app_commands.choices(rank=[
+    app_commands.Choice(name="Class S", value="HERO_S"),
+    app_commands.Choice(name="Class A", value="HERO_A"),
+    app_commands.Choice(name="Class B", value="HERO_B"),
+    app_commands.Choice(name="Class C", value="HERO_C"),
+])
+async def leaderboard_hero(interaction: discord.Interaction, rank: app_commands.Choice[str]):
+    await interaction.response.defer()
+    
+    if db is None:
+        return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+
+    try:
+        users_ref = db.collection(COLLECTION_NAME).stream()
+        leaderboard_entries = []
+
+        for user_doc in users_ref:
+            user_data = user_doc.to_dict()
+            if user_data.get('role_group') == 'HERO':
+                current_rank_key = get_user_rank_key(user_data)
+                if current_rank_key == rank.value:
+                    leaderboard_entries.append({
+                        'id': int(user_doc.id),
+                        'xp': user_data.get('xp', 0),
+                        'level': user_data.get('level', 0)
+                    })
+        
+        # Sắp xếp theo Level trước, sau đó là XP
+        leaderboard_entries.sort(key=lambda x: (x['level'], x['xp']), reverse=True)
+
+        embed = discord.Embed(
+            title=f"🏆 Bảng Xếp Hạng Hero - {rank.name}",
+            description=f"Top 10 người chơi có Level và XP cao nhất trong rank {rank.name}.",
+            color=discord.Color.gold()
+        )
+
+        if not leaderboard_entries:
+            embed.description = "Không tìm thấy người chơi nào ở rank này."
+        else:
+            desc_text = ""
+            for i, entry in enumerate(leaderboard_entries[:10]):
+                member = interaction.guild.get_member(entry['id'])
+                member_name = member.mention if member else f"Người dùng ID: {entry['id']}"
+                desc_text += f"**{i+1}.** {member_name} - **Lv.{entry['level']}** - **{entry['xp']:,}** XP\n"
+            embed.description = desc_text
+        
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        print(f"❌ Lỗi khi lấy leaderboard (hero): {e}")
+        await interaction.followup.send("❌ Đã xảy ra lỗi khi truy vấn bảng xếp hạng.", ephemeral=True)
+
+@leaderboard_group.command(name="monster", description="Bảng xếp hạng các Monster theo Rank")
+@app_commands.describe(rank="Chọn rank Monster để xem")
+@app_commands.choices(rank=[
+    app_commands.Choice(name="God", value="GOD"),
+    app_commands.Choice(name="Dragon", value="DRAGON"),
+    app_commands.Choice(name="Demon", value="DEMON"),
+    app_commands.Choice(name="Tiger", value="TIGER"),
+])
+async def leaderboard_monster(interaction: discord.Interaction, rank: app_commands.Choice[str]):
+    await interaction.response.defer()
+
+    if db is None:
+        return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+        
+    try:
+        users_ref = db.collection(COLLECTION_NAME).stream()
+        leaderboard_entries = []
+
+        for user_doc in users_ref:
+            user_data = user_doc.to_dict()
+            if user_data.get('role_group') == 'MONSTER':
+                current_rank_key = get_user_rank_key(user_data)
+                if current_rank_key and rank.value in current_rank_key:
+                     leaderboard_entries.append({
+                        'id': int(user_doc.id),
+                        'xp': user_data.get('xp', 0),
+                        'level': user_data.get('level', 0)
+                    })
+        
+        leaderboard_entries.sort(key=lambda x: (x['level'], x['xp']), reverse=True)
+
+        embed = discord.Embed(
+            title=f"🏆 Bảng Xếp Hạng Monster - {rank.name}",
+            description=f"Top 10 quái vật có Level và XP cao nhất trong rank {rank.name}.",
+            color=discord.Color.purple()
+        )
+
+        if not leaderboard_entries:
+            embed.description = "Không tìm thấy quái vật nào ở rank này."
+        else:
+            desc_text = ""
+            for i, entry in enumerate(leaderboard_entries[:10]):
+                member = interaction.guild.get_member(entry['id'])
+                member_name = member.mention if member else f"Người dùng ID: {entry['id']}"
+                desc_text += f"**{i+1}.** {member_name} - **Lv.{entry['level']}** - **{entry['xp']:,}** XP\n"
+            embed.description = desc_text
+            
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        print(f"❌ Lỗi khi lấy leaderboard (monster): {e}")
+        await interaction.followup.send("❌ Đã xảy ra lỗi khi truy vấn bảng xếp hạng.", ephemeral=True)
+
+bot.tree.add_command(leaderboard_group)
+
 @bot.tree.command(name="profile", description="Xem Level, XP và số tiền của bạn")
 async def profile(interaction: discord.Interaction):
     data = await get_user_data(interaction.user.id)
@@ -505,9 +640,9 @@ async def profile(interaction: discord.Interaction):
     embed.add_field(name="📜 Nhóm", value=data.get('role_group', 'Chưa chọn'), inline=False)
     embed.add_field(name="⭐ Level", value=f"**{data.get('level', 0)}**", inline=True)
     embed.add_field(name="🏆 Rank", value=rank_role.name if rank_role else "Chưa có", inline=True)
-    embed.add_field(name="📈 XP", value=f"**{data.get('xp', 0)}** / {required_xp}", inline=False)
-    embed.add_field(name="💰 Fund", value=f"**{data.get('fund', 0)}** {ROLE_IDS['FUND_EMOJI']}", inline=True)
-    embed.add_field(name="🎟️ Coupon", value=f"**{data.get('coupon', 0)}** {ROLE_IDS['COUPON_EMOJI']}", inline=True)
+    embed.add_field(name="📈 XP", value=f"**{data.get('xp', 0):,}** / {required_xp:,}", inline=False)
+    embed.add_field(name="💰 Fund", value=f"**{data.get('fund', 0):,}** {ROLE_IDS['FUND_EMOJI']}", inline=True)
+    embed.add_field(name="🎟️ Coupon", value=f"**{data.get('coupon', 0):,}** {ROLE_IDS['COUPON_EMOJI']}", inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="daily", description="Điểm danh mỗi ngày để nhận thưởng (Reset 0:00)")
@@ -522,15 +657,17 @@ async def daily(interaction: discord.Interaction):
         await interaction.response.send_message("⏳ Bạn đã điểm danh hôm nay rồi!", ephemeral=True)
         return
 
-    fund_reward = random.randint(100, 300)
-    coupon_reward = random.randint(50, 150)
+    # [MODIFIED] Tăng phần thưởng daily
+    fund_reward = random.randint(10_000_000_000, 999_000_000_000)
+    coupon_reward = random.randint(10_000_000_000, 999_000_000_000)
     data['fund'] = data.get('fund', 0) + fund_reward
     data['coupon'] = data.get('coupon', 0) + coupon_reward
     data['last_daily'] = datetime.now()
     await save_user_data(interaction.user.id, data)
+    # [MODIFIED] Thêm định dạng cho số lớn
     await interaction.response.send_message(
         f"✅ Điểm danh thành công! Nhận được:\n"
-        f"**+{fund_reward}** {ROLE_IDS['FUND_EMOJI']} & **+{coupon_reward}** {ROLE_IDS['COUPON_EMOJI']}",
+        f"**+{fund_reward:,}** {ROLE_IDS['FUND_EMOJI']} & **+{coupon_reward:,}** {ROLE_IDS['COUPON_EMOJI']}",
         ephemeral=True
     )
 
@@ -718,4 +855,3 @@ if not TOKEN:
     print("⚠️ Chưa có biến môi trường DISCORD_TOKEN!")
 else:
     bot.run(TOKEN)
-
