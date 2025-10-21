@@ -427,9 +427,22 @@ async def on_message(message):
 @bot.tree.command(name="setup_roles_msg", description="[ADMIN ONLY] Thiết lập tin nhắn Reaction Role.")
 @commands.has_permissions(administrator=True)
 async def setup_roles_msg(interaction: discord.Interaction):
-    if not ROLE_IDS.get("HERO_GROUP") or not ROLE_IDS.get("MONSTER_GROUP"):
-        await interaction.response.send_message("❌ Lỗi cấu hình: Vui lòng thay ID mẫu trong ROLE_IDS.", ephemeral=True)
-        return
+    try:
+            # 1. Sao chép TẤT CẢ lệnh toàn cục vào server (guild) này
+            bot.tree.copy_global_to(guild=guild)
+            
+            # 2. XÓA tất cả lệnh toàn cục (để chúng không hiển thị ở server khác)
+            bot.tree.clear_commands(guild=None)
+            
+            # 3. Đồng bộ danh sách lệnh toàn cục (giờ đã trống)
+            await bot.tree.sync() 
+            
+            # 4. Đồng bộ danh sách lệnh của server (guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"🔁 Đã đồng bộ {len(synced)} lệnh slash CHỈ cho server ID: {GUILD_ID}.")
+            
+        except Exception as e:
+            print(f"❌ Lỗi sync command cho server {GUILD_ID}: {e}")
 
     embed = discord.Embed(
         title="⚔️ CHỌN PHE CỦA BẠN 👹",
@@ -855,4 +868,3 @@ if not TOKEN:
     print("⚠️ Chưa có biến môi trường DISCORD_TOKEN!")
 else:
     bot.run(TOKEN)
-
