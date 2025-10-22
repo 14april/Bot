@@ -710,7 +710,7 @@ CURRENCY_CHOICES = [
     app_commands.Choice(name="Fund", value="fund"),
     app_commands.Choice(name="Coupon", value="coupon"),
 ]
-@bot.tree.command(name="all_in", description="Cược 80% Fund hoặc Coupon bạn đang có (Thắng x3-x5, Thua mất hết)")
+@bot.tree.command(name="all_in", description="Cược 80% Fund hoặc Coupon bạn đang có (Thắng x2-x5, Thua x1-x2)")
 @app_commands.describe(currency="Loại tiền tệ bạn muốn cược")
 @app_commands.choices(currency=CURRENCY_CHOICES)
 async def all_in(interaction: discord.Interaction, currency: app_commands.Choice[str]):
@@ -777,9 +777,11 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
 
     old_balance = current_balance
     
-    # ================== START: BẢN SỬA LỖI ==================
+    # ================== START: BẢN SỬA LỖI (LOGIC MỚI) ==================
     if win:
-        multiplier = random.randint(3, 5)
+        # Thắng: x2 (60%), x3 (25%), x5 (15%)
+        multiplier = random.choices([2, 3, 5], weights=[60, 25, 15], k=1)[0]
+        
         # Tiền thắng cược = (số tiền cược * hệ số) - số tiền cược ban đầu
         winnings = bet_amount * (multiplier - 1)
         
@@ -788,11 +790,26 @@ async def all_in(interaction: discord.Interaction, currency: app_commands.Choice
         result_text = f"🎉 **THẮNG LỚN!** Bạn đã trúng **x{multiplier}** số tiền cược!"
         embed.color = discord.Color.green()
     else:
-        data[currency_key] -= bet_amount
-        gain_or_loss = -bet_amount
-        result_text = f"💀 **THUA CƯỢC!** Chúc bạn may mắn lần sau."
+        # Thua: x1 (70%), x1.5 (20%), x2 (10%)
+        loss_multiplier = random.choices([1, 1.5, 2], weights=[70, 20, 10], k=1)[0]
+        
+        # Tính số tiền bị mất
+        loss_amount = int(bet_amount * loss_multiplier)
+        
+        # Người dùng không thể mất nhiều hơn số tiền họ có (current_balance)
+        if loss_amount > current_balance:
+            loss_amount = current_balance
+            result_text = f"💀 **THUA CƯỢC!** Bạn đã mất **TẤT CẢ** (trúng x{loss_multiplier:.1f} nhưng bị giới hạn)!"
+        else:
+            if loss_multiplier == 1:
+                result_text = f"💀 **THUA CƯỢC!** Bạn mất số tiền cược."
+            else:
+                result_text = f"💀 **THUA ĐẬM!** Bạn bị phạt x{loss_multiplier:.1f} số tiền cược!"
+
+        data[currency_key] -= loss_amount
+        gain_or_loss = -loss_amount
         embed.color = discord.Color.red()
-    # ================== END: BẢN SỬA LỖI ==================
+    # ================== END: BẢN SỬA LỖI (LOGIC MỚI) ==================
 
     await save_user_data(user_id, data)
 
