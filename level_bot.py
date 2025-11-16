@@ -32,6 +32,7 @@ INITIAL_EXTENSIONS = [
     'cogs.leaderboard',
     'cogs.reaction_roles',
     'cogs.admin_commands',
+    'cogs.language_command',
 ]
 
 @bot.event
