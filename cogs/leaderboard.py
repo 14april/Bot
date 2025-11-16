@@ -4,14 +4,21 @@ from discord import app_commands
 
 import config
 import database
-from cogs.level_system import get_user_rank_key # Import hàm helper
+import localization # <-- THÊM NÀY
+from cogs.level_system import get_user_rank_key 
 
 class LeaderboardCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # Nhóm lệnh phải được định nghĩa bên trong Cog
     leaderboard_group = app_commands.Group(name="leaderboard", description="Xem bảng xếp hạng theo XP")
+
+    async def get_lang(self, interaction: discord.Interaction):
+        """Helper để lấy ngôn ngữ của user"""
+        data = await database.get_user_data(interaction.user.id)
+        if data is None:
+            return 'vi'
+        return data.get('language', 'vi')
 
     @leaderboard_group.command(name="hero", description="Bảng xếp hạng các Hero theo Rank")
     @app_commands.describe(rank="Chọn rank Hero để xem")
@@ -23,9 +30,10 @@ class LeaderboardCog(commands.Cog):
     ])
     async def leaderboard_hero(self, interaction: discord.Interaction, rank: app_commands.Choice[str]):
         await interaction.response.defer()
+        user_lang = await self.get_lang(interaction) # <-- LẤY NGÔN NGỮ
         
         if database.db is None:
-            return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+            return await interaction.followup.send(localization.get_string(user_lang, 'lb_db_not_ready'), ephemeral=True) # <-- SỬA
 
         try:
             users_ref = database.db.collection(config.COLLECTION_NAME).stream()
@@ -44,19 +52,21 @@ class LeaderboardCog(commands.Cog):
             
             leaderboard_entries.sort(key=lambda x: (x['level'], x['xp']), reverse=True)
 
+            # <-- SỬA -->
             embed = discord.Embed(
-                title=f"🏆 Bảng Xếp Hạng Hero - {rank.name}",
-                description=f"Top 10 người chơi có Level và XP cao nhất trong rank {rank.name}.",
+                title=localization.get_string(user_lang, 'lb_hero_title', rank_name=rank.name),
+                description=localization.get_string(user_lang, 'lb_hero_desc', rank_name=rank.name),
                 color=discord.Color.gold()
             )
 
             if not leaderboard_entries:
-                embed.description = "Không tìm thấy người chơi nào ở rank này."
+                embed.description = localization.get_string(user_lang, 'lb_no_players') # <-- SỬA
             else:
                 desc_text = ""
                 for i, entry in enumerate(leaderboard_entries[:10]):
                     member = interaction.guild.get_member(entry['id'])
-                    member_name = member.mention if member else f"Người dùng ID: {entry['id']}"
+                    # <-- SỬA -->
+                    member_name = member.mention if member else localization.get_string(user_lang, 'lb_user_id', id=entry['id'])
                     desc_text += f"**{i+1}.** {member_name} - **Lv.{entry['level']}** - **{entry['xp']:,}** XP\n"
                 embed.description = desc_text
             
@@ -64,21 +74,22 @@ class LeaderboardCog(commands.Cog):
 
         except Exception as e:
             print(f"❌ Lỗi khi lấy leaderboard (hero): {e}")
-            await interaction.followup.send("❌ Đã xảy ra lỗi khi truy vấn bảng xếp hạng.", ephemeral=True)
+            await interaction.followup.send(localization.get_string(user_lang, 'lb_query_error'), ephemeral=True) # <-- SỬA
 
     @leaderboard_group.command(name="monster", description="Bảng xếp hạng các Monster theo Rank")
     @app_commands.describe(rank="Chọn rank Monster để xem")
     @app_commands.choices(rank=[
-        app_commands.Choice(name="God", value="M_GOD"), # Sửa value cho đúng key
-        app_commands.Choice(name="Dragon", value="M_DRAGON"), # Sửa value (logic của bạn check 'in')
-        app_commands.Choice(name="Demon", value="M_DEMON"), # Sửa value
-        app_commands.Choice(name="Tiger", value="M_TIGER"), # Sửa value
+        app_commands.Choice(name="God", value="M_GOD"), 
+        app_commands.Choice(name="Dragon", value="M_DRAGON"),
+        app_commands.Choice(name="Demon", value="M_DEMON"),
+        app_commands.Choice(name="Tiger", value="M_TIGER"), 
     ])
     async def leaderboard_monster(self, interaction: discord.Interaction, rank: app_commands.Choice[str]):
         await interaction.response.defer()
+        user_lang = await self.get_lang(interaction) # <-- LẤY NGÔN NGỮ
 
         if database.db is None:
-            return await interaction.followup.send("❌ Lỗi: Cơ sở dữ liệu chưa sẵn sàng.", ephemeral=True)
+            return await interaction.followup.send(localization.get_string(user_lang, 'lb_db_not_ready'), ephemeral=True) # <-- SỬA
             
         try:
             users_ref = database.db.collection(config.COLLECTION_NAME).stream()
@@ -88,7 +99,6 @@ class LeaderboardCog(commands.Cog):
                 user_data = user_doc.to_dict()
                 if user_data.get('role_group') == 'MONSTER':
                     current_rank_key = get_user_rank_key(user_data)
-                    # Logic check 'in' của bạn
                     if current_rank_key and rank.value in current_rank_key: 
                          leaderboard_entries.append({
                             'id': int(user_doc.id),
@@ -98,19 +108,21 @@ class LeaderboardCog(commands.Cog):
             
             leaderboard_entries.sort(key=lambda x: (x['level'], x['xp']), reverse=True)
 
+            # <-- SỬA -->
             embed = discord.Embed(
-                title=f"🏆 Bảng Xếp Hạng Monster - {rank.name}",
-                description=f"Top 10 quái vật có Level và XP cao nhất trong rank {rank.name}.",
+                title=localization.get_string(user_lang, 'lb_monster_title', rank_name=rank.name),
+                description=localization.get_string(user_lang, 'lb_monster_desc', rank_name=rank.name),
                 color=discord.Color.purple()
             )
 
             if not leaderboard_entries:
-                embed.description = "Không tìm thấy quái vật nào ở rank này."
+                embed.description = localization.get_string(user_lang, 'lb_no_players') # <-- SỬA
             else:
                 desc_text = ""
                 for i, entry in enumerate(leaderboard_entries[:10]):
                     member = interaction.guild.get_member(entry['id'])
-                    member_name = member.mention if member else f"Người dùng ID: {entry['id']}"
+                    # <-- SỬA -->
+                    member_name = member.mention if member else localization.get_string(user_lang, 'lb_user_id', id=entry['id'])
                     desc_text += f"**{i+1}.** {member_name} - **Lv.{entry['level']}** - **{entry['xp']:,}** XP\n"
                 embed.description = desc_text
                 
@@ -118,7 +130,7 @@ class LeaderboardCog(commands.Cog):
 
         except Exception as e:
             print(f"❌ Lỗi khi lấy leaderboard (monster): {e}")
-            await interaction.followup.send("❌ Đã xảy ra lỗi khi truy vấn bảng xếp hạng.", ephemeral=True)
+            await interaction.followup.send(localization.get_string(user_lang, 'lb_query_error'), ephemeral=True) # <-- SỬA
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LeaderboardCog(bot))
