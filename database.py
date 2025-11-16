@@ -2,7 +2,7 @@ import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime
+from datetime import datetime # <-- Chúng ta sẽ dùng 'datetime' từ đây
 
 # Import file config
 import config
@@ -49,22 +49,22 @@ async def get_user_data(user_id):
         if doc.exists:
             data = doc.to_dict()
             
-            # (Phần xử lý datetime của bạn)
-            if data.get('last_xp_message') and isinstance(data['last_xp_message'], firestore.client.datetime):
+            # (Copy y hệt phần xử lý datetime từ file cũ của bạn)
+            # === SỬA DÒNG NÀY ===
+            if data.get('last_xp_message') and isinstance(data['last_xp_message'], datetime):
                 data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
             elif not data.get('last_xp_message'):
                  data['last_xp_message'] = datetime.min
             
-            if data.get('last_daily') and isinstance(data['last_daily'], firestore.client.datetime):
+            # === SỬA DÒNG NÀY ===
+            if data.get('last_daily') and isinstance(data['last_daily'], datetime):
                 data['last_daily'] = data['last_daily'].replace(tzinfo=None)
             elif not data.get('last_daily'):
                 data['last_daily'] = None
-            
-            # === THÊM ĐOẠN NÀY ===
+                
             # Đảm bảo người dùng cũ cũng có trường 'language'
             if 'language' not in data:
                 data['language'] = 'vi'
-            # =====================
                 
             return data
         else:
@@ -77,7 +77,7 @@ async def get_user_data(user_id):
                 'role_group': None,
                 'last_daily': None,
                 'last_xp_message': datetime.min,
-                'language': 'vi' # <-- THÊM DÒNG NÀY
+                'language': 'vi' 
             }
             return default_data
     except Exception as e:
@@ -93,18 +93,16 @@ async def save_user_data(user_id, data):
             print(f"🛑 Không thể lưu dữ liệu cho user {user_id}. DB chưa sẵn sàng.")
             return
 
-    # Dùng biến từ config.py
     doc_ref = db.collection(config.COLLECTION_NAME).document(str(user_id))
     try:
         doc_ref.set(data)
     except Exception as e:
         print(f"❌ Lỗi khi lưu dữ liệu cho user {user_id}: {e}")
-        db = None # Thử reset db connection nếu lỗi
+        db = None 
 
 async def get_reaction_message_ids():
     """Lấy Message ID của tin nhắn Reaction Role từ Firestore."""
     if db is None: return {}
-    # Dùng biến từ config.py
     doc_ref = db.collection(config.CONFIG_COLLECTION).document(config.CONFIG_DOC_ID)
     try:
         doc = doc_ref.get()
@@ -116,7 +114,6 @@ async def get_reaction_message_ids():
 async def save_reaction_message_id(guild_id, message_id, channel_id):
     """Lưu Message ID của tin nhắn Reaction Role vào Firestore."""
     if db is None: return
-    # Dùng biến từ config.py
     doc_ref = db.collection(config.CONFIG_COLLECTION).document(config.CONFIG_DOC_ID)
     try:
         @firestore.transactional
