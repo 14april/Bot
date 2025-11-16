@@ -33,6 +33,7 @@ INITIAL_EXTENSIONS = [
     'cogs.reaction_roles',
     'cogs.admin_commands',
     'cogs.language_command',
+    'cogs.voucher_calc',
 ]
 
 @bot.event
