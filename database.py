@@ -43,14 +43,13 @@ async def get_user_data(user_id):
         if db is None:
             return None 
 
-    # Dùng biến từ config.py
     doc_ref = db.collection(config.COLLECTION_NAME).document(str(user_id))
     try:
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
             
-            # (Copy y hệt phần xử lý datetime từ file cũ của bạn)
+            # (Phần xử lý datetime của bạn)
             if data.get('last_xp_message') and isinstance(data['last_xp_message'], firestore.client.datetime):
                 data['last_xp_message'] = data['last_xp_message'].replace(tzinfo=None)
             elif not data.get('last_xp_message'):
@@ -60,11 +59,17 @@ async def get_user_data(user_id):
                 data['last_daily'] = data['last_daily'].replace(tzinfo=None)
             elif not data.get('last_daily'):
                 data['last_daily'] = None
+            
+            # === THÊM ĐOẠN NÀY ===
+            # Đảm bảo người dùng cũ cũng có trường 'language'
+            if 'language' not in data:
+                data['language'] = 'vi'
+            # =====================
                 
             return data
         else:
             # Tạo dữ liệu mặc định
-            return {
+            default_data = {
                 'xp': 0,
                 'level': 0,
                 'fund': 0,
@@ -72,7 +77,9 @@ async def get_user_data(user_id):
                 'role_group': None,
                 'last_daily': None,
                 'last_xp_message': datetime.min,
+                'language': 'vi' # <-- THÊM DÒNG NÀY
             }
+            return default_data
     except Exception as e:
         print(f"❌ Lỗi khi lấy dữ liệu cho user {user_id}: {e}")
         return None
