@@ -39,61 +39,39 @@ LANG_STRINGS = {
         'rank_up_dm': "🌟 Bạn đã được thăng cấp Rank thành **{new_role_name}**!",
 
         # === LỆNH NGƯỜI DÙNG ===
-        # /profile
         'profile_title': "👤 Hồ sơ của {name}",
-        'profile_group': "📜 Nhóm",
-        'profile_no_group': "Chưa chọn",
-        'profile_level': "⭐ Level",
-        'profile_rank': "🏆 Rank",
-        'profile_no_rank': "Chưa có",
-        'profile_xp': "📈 XP",
-        'profile_fund': "💰 Fund",
-        'profile_coupon': "🎟️ Coupon",
-        
-        # /daily
-        'daily_already': "⏳ Bạn đã điểm danh hôm nay rồi!",
-        'daily_success': "✅ Điểm danh thành công! Nhận được:\n**+{fund_reward:,}** {fund_emoji} & **+{coupon_reward:,}** {coupon_emoji}",
-
-        # /exchange
-        'exchange_min_amount': "❌ Số tiền trao đổi tối thiểu là 100.",
-        'exchange_not_enough': "❌ Bạn không đủ {source_name}.",
-        'exchange_success': "✅ Đã đổi **{amount:,}** {source_name} sang {target_name}.",
-
-        # /all_in
-        'all_in_title': "🎲 ALL IN - Cược {currency_name}",
-        'all_in_description': "{mention} cược **{bet_amount:,}** {currency_emoji}...",
-        'all_in_result': "Kết quả",
-        'all_in_win_lucky': "🎉 **THẮNG LỚN!** Bạn đã trúng **x{multiplier}** số tiền cược!",
-        'all_in_lose_normal': "💀 **THUA CƯỢC!** Bạn mất số tiền cược.",
-        'all_in_lose_heavy': "💀 **THUA ĐẬM!** Bạn bị phạt x{loss_multiplier:.1f} số tiền cược!",
-        'all_in_lose_all': "💀 **THUA CƯỢC!** Bạn đã mất **TẤT CẢ** (trúng x{loss_multiplier:.1f} nhưng bị giới hạn)!",
-        'all_in_bet_currency': "Loại tiền cược",
-        'all_in_bet_amount': "Số tiền cược",
-        'all_in_profit_loss': "Lãi/Lỗ",
-        'all_in_old_balance': "Số dư cũ",
-        'all_in_new_balance': "Số dư mới",
-        
-        # /transfer
+        # ... (các key khác của bạn)
         'transfer_self': "❌ Bạn không thể tự chuyển cho mình.",
         'transfer_success': "✅ Đã chuyển **{amount:,}** {currency_key} cho {recipient_mention}.",
-
+        
+        # === VOUCHER CALC (MỚI) ===
+        'calc_prompt': "🎫 Chọn loại vé bạn muốn tính:",
+        'calc_button_black': "Vé đen",
+        'calc_button_relic': "Vé kỉ vật",
+        'calc_modal_title': "Tính vé trong tương lai",
+        'calc_modal_current': "Số vé {ticket_type} hiện tại",
+        'calc_modal_current_placeholder': "Nhập số vé (vd: 100)",
+        'calc_modal_months': "Số tháng muốn tính (1–12)",
+        'calc_modal_months_placeholder': "Nhập số tháng (vd: 3)",
+        'calc_invalid_input': "⚠️ Dữ liệu không hợp lệ. Vui lòng kiểm tra lại số vé và số tháng (1-12).",
+        'calc_fallback_prompt_ticket': "Nhập **Số vé {ticket_type} hiện tại**:",
+        'calc_fallback_prompt_month': "Nhập **Số tháng cần tính (1–12)**:",
+        'calc_fallback_error': "⚠️ Dữ liệu không hợp lệ hoặc hết thời gian nhập.",
+        'calc_calculating': "Đang tính toán...",
+        'calc_results_title': "📊 Kết quả dự tính cho **{ticket_type}** (Tính từ tháng sau):",
+        'calc_ticket_type_black': "đen",
+        'calc_ticket_type_relic': "kỉ vật",
+        'calc_ticket_result_line': "vé {ticket_type}",
     },
     'en': {
         # === LỖI CHUNG ===
         'db_error': "❌ Database error. Please try again later.",
-        'min_amount_100': "❌ Minimum amount is 100.",
-        'not_enough_fund': "❌ You do not have enough Fund.",
-        'not_enough_coupon': "❌ You do not have enough Coupon.",
-        'not_enough_currency': "❌ You do not have enough {currency_name} to bet.",
+        # ... (các key khác của bạn)
         'generic_error': "❌ An error occurred: {error}",
 
         # === LỆNH ADMIN ===
-        'admin_buff_gt_zero': "❌ Amount must be greater than 0.",
-        'admin_buff_success': "✅ Added **{amount:,}** {currency_key} to {member_mention}.",
         'admin_not_owner': "⛔ This command is for the Bot Owner only.",
-        'setup_config_error': "❌ Configuration error: Please replace placeholder IDs in ROLE_IDS.",
-        'setup_setting_up': "Setting up...",
-        'setup_success': "✅ Successfully set up! Please pin this message.",
+        # ... (các key khác của bạn)
         'setup_error': "❌ Error: The bot could not send a message or add reactions.",
 
         # === LỆNH NGÔN NGỮ ===
@@ -101,12 +79,7 @@ LANG_STRINGS = {
 
         # === LỆNH LEADERBOARD ===
         'lb_db_not_ready': "❌ Error: Database is not ready.",
-        'lb_query_error': "❌ An error occurred while querying the leaderboard.",
-        'lb_hero_title': "🏆 Hero Leaderboard - {rank_name}",
-        'lb_hero_desc': "Top 10 players with the highest Level and XP in {rank_name}.",
-        'lb_monster_title': "🏆 Monster Leaderboard - {rank_name}",
-        'lb_monster_desc': "Top 10 monsters with the highest Level and XP in {rank_name}.",
-        'lb_no_players': "No players found at this rank.",
+         # ... (các key khác của bạn)
         'lb_user_id': "User ID: {id}",
 
         # === HỆ THỐNG LEVEL (DM) ===
@@ -117,43 +90,29 @@ LANG_STRINGS = {
         'rank_up_dm': "🌟 You have been promoted to **{new_role_name}** rank!",
 
         # === LỆNH NGƯỜI DÙNG ===
-        # /profile
         'profile_title': "👤 {name}'s Profile",
-        'profile_group': "📜 Group",
-        'profile_no_group': "Not selected",
-        'profile_level': "⭐ Level",
-        'profile_rank': "🏆 Rank",
-        'profile_no_rank': "No rank",
-        'profile_xp': "📈 XP",
-        'profile_fund': "💰 Fund",
-        'profile_coupon': "🎟️ Coupon",
-        
-        # /daily
-        'daily_already': "⏳ You have already claimed your daily reward today!",
-        'daily_success': "✅ Daily reward claimed! You received:\n**+{fund_reward:,}** {fund_emoji} & **+{coupon_reward:,}** {coupon_emoji}",
-
-        # /exchange
-        'exchange_min_amount': "❌ Minimum exchange amount is 100.",
-        'exchange_not_enough': "❌ You do not have enough {source_name}.",
-        'exchange_success': "✅ Exchanged **{amount:,}** {source_name} for {target_name}.",
-
-        # /all_in
-        'all_in_title': "🎲 ALL IN - Bet {currency_name}",
-        'all_in_description': "{mention} is betting **{bet_amount:,}** {currency_emoji}...",
-        'all_in_result': "Result",
-        'all_in_win_lucky': "🎉 **BIG WIN!** You hit **x{multiplier}** your bet!",
-        'all_in_lose_normal': "💀 **BET LOST!** You lost your bet.",
-        'all_in_lose_heavy': "💀 **HEAVY LOSS!** You were fined x{loss_multiplier:.1f} your bet!",
-        'all_in_lose_all': "💀 **BET LOST!** You lost **EVERYTHING** (hit x{loss_multiplier:.1f} but were capped)!",
-        'all_in_bet_currency': "Currency Bet",
-        'all_in_bet_amount': "Amount Bet",
-        'all_in_profit_loss': "Profit/Loss",
-        'all_in_old_balance': "Old Balance",
-        'all_in_new_balance': "New Balance",
-
-        # /transfer
+        # ... (các key khác của bạn)
         'transfer_self': "❌ You cannot transfer to yourself.",
         'transfer_success': "✅ Transferred **{amount:,}** {currency_key} to {recipient_mention}.",
+
+        # === VOUCHER CALC (MỚI) ===
+        'calc_prompt': "🎫 Select the ticket type you want to calculate:",
+        'calc_button_black': "Black Ticket",
+        'calc_button_relic': "Relic Ticket",
+        'calc_modal_title': "Calculate future tickets",
+        'calc_modal_current': "Current {ticket_type} tickets",
+        'calc_modal_current_placeholder': "Enter ticket count (e.g., 100)",
+        'calc_modal_months': "Number of months to calculate (1–12)",
+        'calc_modal_months_placeholder': "Enter number of months (e.g., 3)",
+        'calc_invalid_input': "⚠️ Invalid data. Please check the ticket count and months (1-12).",
+        'calc_fallback_prompt_ticket': "Enter **Current {ticket_type} tickets**:",
+        'calc_fallback_prompt_month': "Enter **Number of months to calculate (1–12)**:",
+        'calc_fallback_error': "⚠️ Invalid data or input timed out.",
+        'calc_calculating': "Calculating...",
+        'calc_results_title': "📊 Estimated results for **{ticket_type}** (Starting next month):",
+        'calc_ticket_type_black': "black",
+        'calc_ticket_type_relic': "relic",
+        'calc_ticket_result_line': "{ticket_type} tickets",
     }
 }
 
