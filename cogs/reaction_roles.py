@@ -4,17 +4,27 @@ from discord import app_commands
 
 import config
 import database
-from cogs.level_system import update_user_level_and_roles # Import hàm helper
+import localization # <-- THÊM NÀY
+from cogs.level_system import update_user_level_and_roles 
 
 class ReactionRolesCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def get_lang(self, interaction: discord.Interaction):
+        """Helper để lấy ngôn ngữ của user"""
+        data = await database.get_user_data(interaction.user.id)
+        if data is None:
+            return 'vi'
+        return data.get('language', 'vi')
+
     @app_commands.command(name="setup_roles_msg", description="[ADMIN ONLY] Thiết lập tin nhắn Reaction Role.")
     @commands.has_permissions(administrator=True)
     async def setup_roles_msg(self, interaction: discord.Interaction):
+        user_lang = await self.get_lang(interaction) # <-- LẤY NGÔN NGỮ
+
         if not config.ROLE_IDS.get("HERO_GROUP") or not config.ROLE_IDS.get("MONSTER_GROUP"):
-            await interaction.response.send_message("❌ Lỗi cấu hình: Vui lòng thay ID mẫu trong ROLE_IDS.", ephemeral=True)
+            await interaction.response.send_message(localization.get_string(user_lang, 'setup_config_error'), ephemeral=True) # <-- SỬA
             return
 
         embed = discord.Embed(
@@ -25,18 +35,18 @@ class ReactionRolesCog(commands.Cog):
                         "**Cách đổi/hủy:** Bỏ reaction cũ và chọn reaction mới. Việc này sẽ **GIỮ NGUYÊN** Level và XP.",
             color=discord.Color.gold()
         )
-        await interaction.response.send_message("Đang thiết lập...", ephemeral=True)
+        await interaction.response.send_message(localization.get_string(user_lang, 'setup_setting_up'), ephemeral=True) # <-- SỬA
         try:
             message = await interaction.channel.send(embed=embed)
             await message.add_reaction("⚔️")
             await message.add_reaction("👹")
             await database.save_reaction_message_id(interaction.guild_id, message.id, interaction.channel_id)
-            await interaction.edit_original_response(content="✅ Đã thiết lập thành công! Vui lòng ghim tin nhắn này.")
+            await interaction.edit_original_response(content=localization.get_string(user_lang, 'setup_success')) # <-- SỬA
         except Exception as e:
             print(f"Lỗi khi thiết lập Reaction Role: {e}")
-            await interaction.edit_original_response(content="❌ Lỗi: Bot không thể gửi tin nhắn hoặc thêm reaction.")
+            await interaction.edit_original_response(content=localization.get_string(user_lang, 'setup_error')) # <-- SỬA
 
-    # Hàm helper được chuyển thành phương thức của class
+    # (Hàm handle_reaction không đổi vì nó không gửi tin nhắn nào)
     async def handle_reaction(self, payload: discord.RawReactionActionEvent, add: bool):
         if database.db is None: return
         config_data = await database.get_reaction_message_ids()
@@ -76,8 +86,8 @@ class ReactionRolesCog(commands.Cog):
             if role not in member.roles: await member.add_roles(role)
             user_data['role_group'] = new_group_name
             await database.save_user_data(payload.user_id, user_data)
-            await update_user_level_and_roles(member, user_data) # Dùng helper
-        else: # Remove reaction
+            await update_user_level_and_roles(member, user_data) 
+        else: 
             if role in member.roles:
                 await member.remove_roles(role)
                 group_prefix = 'HERO' if role_key == 'HERO_GROUP' else 'M_'
